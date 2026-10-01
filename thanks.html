@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Thank you · Marya El Makki</title>
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@200;300;400;500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#09080b;--fg:#f3f2ef;--muted:#b4b4ae;--gold:#d3b47f;--gutter:clamp(16px,5vw,80px);--body:"IBM Plex Sans","Helvetica Neue",Arial,sans-serif;--mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:var(--body);-webkit-font-smoothing:antialiased;overflow:hidden}
+.bg{position:fixed;inset:0}
+.bg video{width:100%;height:100%;object-fit:cover;filter:brightness(.5) saturate(.9);transform:scale(1.08);animation:drift 22s ease-in-out infinite alternate}
+@keyframes drift{to{transform:scale(1)}}
+.bg::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(9,8,11,.7) 0%,rgba(9,8,11,.15) 35%,rgba(9,8,11,.25) 65%,rgba(9,8,11,.92) 100%),radial-gradient(ellipse 90% 80% at 50% 50%,transparent 40%,rgba(9,8,11,.75) 100%),rgba(60,20,90,.12)}
+header{position:fixed;top:0;left:0;right:0;z-index:2;display:flex;justify-content:space-between;padding:24px var(--gutter);font-family:var(--mono);font-size:12px;letter-spacing:.24em;text-transform:uppercase}
+header a{color:inherit;text-decoration:none}
+main{position:relative;z-index:1;height:100svh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:0 var(--gutter)}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:var(--gold);margin:0 0 26px}
+h1{margin:0;font-weight:500;font-size:clamp(40px,7vw,120px);line-height:.95;letter-spacing:-.04em;max-width:14ch}
+h1 .ln{display:block;overflow:hidden;padding-bottom:.06em}
+h1 .ln>span{display:inline-block;transform:translateY(105%);animation:up 1.4s cubic-bezier(.16,1,.3,1) forwards}
+h1 .ln:nth-child(2)>span{animation-delay:.15s;font-weight:200}
+p.msg{margin:28px 0 0;font-size:clamp(17px,1.6vw,22px);font-weight:300;color:var(--muted);opacity:0;animation:fade 1.2s .7s forwards}
+.cta{margin-top:40px;display:inline-flex;gap:14px;font-family:var(--mono);font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:#0b0b0c;background:var(--gold);padding:15px 22px;text-decoration:none;opacity:0;animation:fade 1s 1.1s forwards;transition:transform .3s}
+.cta:hover{transform:translateY(-2px)}
+.cap{position:fixed;right:var(--gutter);bottom:26px;z-index:2;font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
+.cap b{color:var(--fg);font-family:var(--body);font-weight:400;letter-spacing:.04em;text-transform:none;font-size:13px;margin-left:10px;transition:opacity .4s}
+@keyframes up{to{transform:none}}
+@keyframes fade{to{opacity:1}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}h1 .ln>span{transform:none}p.msg,.cta{opacity:1}}
+</style>
+</head>
+<body>
+<div class="bg" aria-hidden="true"><video id="v" autoplay muted loop playsinline poster="assets/img/poster-hero.jpg" src="assets/video/hero-reel.mp4"></video></div>
+<header><a href="./">Marya El Makki</a><span>Abu Dhabi, UAE</span></header>
+<main>
+  <p class="eyebrow" id="kicker">Request received</p>
+  <h1><span class="ln"><span>Thank you</span></span><span class="ln"><span>for submitting your details.</span></span></h1>
+  <p class="msg">I will contact you ASAP.</p>
+  <a class="cta" href="./">Back to the portfolio <span aria-hidden="true">→</span></a>
+</main>
+<p class="cap" aria-hidden="true">Featured<b id="capT"></b></p>
+<script>
+(function(){
+  var names = {canva:"Canva AI Masterclass",capcut:"CapCut Masterclass",ai:"Think With AI",procreate:"Procreate private lessons",linearity:"Linearity Curve private lessons",metahuman:"Custom MetaHuman"};
+  var c = new URLSearchParams(location.search).get("course");
+  if (names[c]) document.getElementById("kicker").textContent = "Request received · " + names[c];
+  var caps = [[0,"From Toba With Love · AI film"],[3,"A model · AI motion"],[6,"Dark · Illustration"],[9,"From Toba With Love · AI film"],[12,"Face loop · Motion"],[15,"A model · AI motion"],[17.5,"Dark · Illustration"],[20.5,"Illustration in motion"],[24,"From Toba With Love · AI film"]];
+  var v = document.getElementById("v"), t = document.getElementById("capT"), last = "";
+  v.addEventListener("timeupdate", function(){ var l = caps[0][1]; caps.forEach(function(x){ if (v.currentTime >= x[0]) l = x[1] }); if (l !== last) { last = l; t.style.opacity = 0; setTimeout(function(){ t.textContent = l; t.style.opacity = 1 }, 250) } });
+  var p = v.play(); if (p && p.catch) p.catch(function(){});
+})();
+</script>
+</body>
+</html>
