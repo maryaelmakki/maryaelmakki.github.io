@@ -1,4 +1,216 @@
 try{
+/*
+ * velaris.js: scroll-linked animated noise background, plain JS + WebGL.
+ * Port of "Velaris" by amanshakya307 (21st.dev) for a no-framework site.
+ *
+ * Usage:
+ *   <section class="vl-host" data-velaris> ... content ... </section>
+ *   (loaded with the site scripts)
+ *   Velaris.mount(document.querySelector('[data-velaris]'), { ...options })
+ *
+ * Options (all optional):
+ *   bg        "#000000"             base colour, keep black on Marya's site
+ *   colors    [c0,c1,c2,c3]         four hex colours (the fourth is usually dark)
+ *   stops     [{at:0,colors:[...]}, {at:1,colors:[...]}]  colours by scroll progress (overrides colors)
+ *   speed     0.6                   idle drift speed (time-based)
+ *   travel    6.0                   how far the noise moves across the full scroll of the section
+ *   grain     0.15                  film grain amount (keep low: 0.1 to 0.2)
+ *   intensity 0.9                   peak colour strength
+ *   edgeFade  0.25                  fraction of the scroll range used to fade in from / out to black
+ *   res       0.5                   render scale (0.5 = half resolution; the image is soft, so this is free)
+ *   smooth    6                     scroll smoothing strength (higher = snappier)
+ */
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 0: "+(e&&e.message||e))}
+try{
+(function (global) {
+  'use strict';
+
+  var VS = 'attribute vec2 position;varying vec2 vUv;void main(){vUv=position*.5+.5;gl_Position=vec4(position,0.,1.);}';
+
+  // Fragment shader: same look as the original (2D simplex, four-colour blend, glow, vignette, grain),
+  // plus u_amp, which fades the whole field to black at the section edges.
+  var FS = [
+    'precision mediump float;',
+    'varying vec2 vUv;',
+    'uniform vec2 u_resolution;uniform float u_time;uniform float u_grain;uniform float u_amp;',
+    'uniform vec3 u_colors[4];uniform vec3 u_bg;',
+    'vec3 permute(vec3 x){return mod(((x*34.)+1.)*x,289.);}',
+    'float snoise(vec2 v){const vec4 C=vec4(.211324865405187,.366025403784439,-.577350269189626,.024390243902439);',
+    'vec2 i=floor(v+dot(v,C.yy));vec2 x0=v-i+dot(i,C.xx);vec2 i1=(x0.x>x0.y)?vec2(1.,0.):vec2(0.,1.);',
+    'vec4 x12=x0.xyxy+C.xxzz;x12.xy-=i1;i=mod(i,289.);',
+    'vec3 p=permute(permute(i.y+vec3(0.,i1.y,1.))+i.x+vec3(0.,i1.x,1.));',
+    'vec3 m=max(.5-vec3(dot(x0,x0),dot(x12.xy,x12.xy),dot(x12.zw,x12.zw)),0.);m=m*m;m=m*m;',
+    'vec3 x=2.*fract(p*C.www)-1.;vec3 h=abs(x)-.5;vec3 ox=floor(x+.5);vec3 a0=x-ox;',
+    'm*=1.79284291400159-.85373472095314*(a0*a0+h*h);vec3 g;g.x=a0.x*x0.x+h.x*x0.y;g.yz=a0.yz*x12.xz+h.yz*x12.yw;',
+    'return 130.*dot(m,g);}',
+    'void main(){vec2 uv=vUv;float ratio=u_resolution.x/u_resolution.y;vec2 p=uv-.5;p.x*=ratio;',
+    'float t=u_time*.1;',
+    'float n1=snoise(p*.4+vec2(t*.2,-t*.3));',
+    'float n2=snoise(p*.55+vec2(-t*.15,t*.25)+n1*.25);',
+    'float n3=snoise(p*.75+vec2(t*.1,-t*.2)+n2*.2);',
+    'vec3 col=u_bg;float dist=length(p)*1.5;float vig=1.-smoothstep(.3,1.2,dist);',
+    'col=mix(col,u_colors[0],smoothstep(-.2,.5,n1)*.85);',
+    'col=mix(col,u_colors[1],smoothstep(-.1,.6,n2)*.7);',
+    'col=mix(col,u_colors[2],smoothstep(-.3,.4,n3)*.6);',
+    'col=mix(col,u_colors[3],smoothstep(0.,.7,n1*n2)*.5);',
+    'col+=u_colors[1]*smoothstep(.8,0.,dist)*.3;',
+    'col=mix(col*.2,col,vig);',
+    'col=mix(u_bg,col,u_amp);',
+    'float gr=fract(sin(dot(uv,vec2(12.9898,78.233)))*43758.5453+u_time);',
+    'col+=(gr-.5)*u_grain*.1*u_amp;',
+    'gl_FragColor=vec4(col,1.);}'
+  ].join('\n');
+
+  function hex(h) {
+    h = h.replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    return [parseInt(h.slice(0, 2), 16) / 255, parseInt(h.slice(2, 4), 16) / 255, parseInt(h.slice(4, 6), 16) / 255];
+  }
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function smoothstep(a, b, x) { x = clamp((x - a) / (b - a), 0, 1); return x * x * (3 - 2 * x); }
+
+  // Colour at scroll progress p, interpolated between stops.
+  function colorsAt(stops, p) {
+    if (stops.length === 1) return stops[0].rgb;
+    for (var i = 0; i < stops.length - 1; i++) {
+      var a = stops[i], b = stops[i + 1];
+      if (p <= b.at || i === stops.length - 2) {
+        var k = smoothstep(a.at, b.at, p), out = [];
+        for (var j = 0; j < 12; j++) out.push(a.rgb[j] + (b.rgb[j] - a.rgb[j]) * k);
+        return out;
+      }
+    }
+    return stops[stops.length - 1].rgb;
+  }
+
+  function mount(host, opts) {
+    if (!host) return null;
+    opts = opts || {};
+    var o = {
+      bg: opts.bg || '#000000',
+      speed: opts.speed != null ? opts.speed : 0.6,
+      travel: opts.travel != null ? opts.travel : 6.0,
+      grain: opts.grain != null ? opts.grain : 0.15,
+      intensity: opts.intensity != null ? opts.intensity : 0.9,
+      edgeFade: opts.edgeFade != null ? opts.edgeFade : 0.25,
+      res: opts.res != null ? opts.res : 0.5,
+      smooth: opts.smooth != null ? opts.smooth : 6,
+      fps: opts.fps || 0
+    };
+    var stops;
+    function setStops(list) {
+      stops = list.map(function (s) {
+        var c = s.colors.slice(0, 4); while (c.length < 4) c.push('#000000');
+        return { at: s.at, rgb: [].concat.apply([], c.map(hex)) };
+      }).sort(function (a, b) { return a.at - b.at; });
+    }
+    setStops(opts.stops || [{ at: 0, colors: opts.colors || ['#2a2a2a', '#1a1a1a', '#3a3a3a', '#000000'] }]);
+
+    // The canvas sits behind the content and never takes pointer events or screen-reader focus.
+    var canvas = document.createElement('canvas');
+    canvas.setAttribute('aria-hidden', 'true');
+    canvas.className = 'vl-canvas';
+    canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;z-index:0';
+    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    host.insertBefore(canvas, host.firstChild);
+
+    var gl = canvas.getContext('webgl', { antialias: false, alpha: false, powerPreference: 'low-power' });
+    if (!gl) { canvas.remove(); host.style.background = o.bg; return null; } // still looks finished: plain black
+
+    function shader(type, src) {
+      var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+      return s;
+    }
+    var prog = gl.createProgram();
+    gl.attachShader(prog, shader(gl.VERTEX_SHADER, VS));
+    gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, FS));
+    gl.linkProgram(prog); gl.useProgram(prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    var pos = gl.getAttribLocation(prog, 'position');
+    gl.enableVertexAttribArray(pos); gl.vertexAttribPointer(pos, 2, gl.FLOAT, false, 0, 0);
+    var U = {};
+    ['u_resolution', 'u_time', 'u_grain', 'u_amp', 'u_colors', 'u_bg'].forEach(function (k) { U[k] = gl.getUniformLocation(prog, k); });
+    gl.uniform3fv(U.u_bg, hex(o.bg));
+
+    function resize() {
+      var w = Math.max(1, Math.round(host.clientWidth * o.res));
+      var h = Math.max(1, Math.round(host.clientHeight * o.res));
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; gl.viewport(0, 0, w, h); }
+    }
+    var ro = new ResizeObserver(resize); ro.observe(host); resize();
+
+    // Scroll progress: 0 when the section's top meets the bottom of the screen,
+    // 1 when its bottom leaves the top. Read once per frame, never in a scroll listener.
+    function progress() {
+      var r = host.getBoundingClientRect(), vh = innerHeight;
+      return clamp((vh - r.top) / (r.height + vh), 0, 1);
+    }
+
+    var reduce = matchMedia('(prefers-reduced-motion: reduce)');
+    var clock = 0, sp = progress(), last = 0, raf = 0, visible = false, alive = true;
+
+    var lastDraw = 0;
+    function frame(now) {
+      raf = 0;
+      if (!alive) return;
+      // optional frame cap (phones): soft noise at 30fps looks the same and costs half
+      if (o.fps && now - lastDraw < 1000 / o.fps - 2) { if (visible) raf = requestAnimationFrame(frame); return; }
+      lastDraw = now;
+      var dt = last ? Math.min(0.05, (now - last) / 1000) : 0; last = now;
+      var target = progress();
+      // Frame-rate independent smoothing (same feel at 60Hz and 120Hz).
+      sp += (target - sp) * (1 - Math.exp(-o.smooth * dt));
+      if (!reduce.matches) clock += dt * o.speed;
+
+      // Fade from black on entry and back to black on exit, so the hand-over is never a hard edge.
+      var e = o.edgeFade;
+      var amp = o.intensity * smoothstep(0, e, sp) * (1 - smoothstep(1 - e, 1, sp));
+
+      gl.uniform2f(U.u_resolution, canvas.width, canvas.height);
+      gl.uniform1f(U.u_time, clock + sp * o.travel * 10);
+      gl.uniform1f(U.u_grain, o.grain);
+      gl.uniform1f(U.u_amp, amp);
+      gl.uniform3fv(U.u_colors, new Float32Array(colorsAt(stops, sp)));
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      if (visible) raf = requestAnimationFrame(frame);
+    }
+    function start() { if (!raf && alive && !document.hidden) { last = 0; raf = requestAnimationFrame(frame); } }
+    function stop() { if (raf) cancelAnimationFrame(raf); raf = 0; }
+
+    // Only run while the section is on screen and the tab is visible.
+    var io = new IntersectionObserver(function (en) {
+      visible = en[0].isIntersecting; visible ? start() : stop();
+    }, { rootMargin: '10% 0px' });
+    io.observe(host);
+    function onVis() { document.hidden ? stop() : (visible && start()); }
+    document.addEventListener('visibilitychange', onVis);
+
+    return {
+      // move the same canvas and context to another section, with its own colour stops
+      retarget: function (h, opt) {
+        if (!h || h === host) { if (opt && opt.stops) setStops(opt.stops); return; }
+        io.unobserve(host); ro.unobserve(host);
+        host = h; if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+        host.insertBefore(canvas, host.firstChild);
+        if (opt && opt.stops) setStops(opt.stops);
+        if (opt && opt.intensity != null) o.intensity = opt.intensity;
+        sp = progress(); resize(); io.observe(host); ro.observe(host);
+      },
+      destroy: function () {
+        alive = false; stop(); io.disconnect(); ro.disconnect();
+        document.removeEventListener('visibilitychange', onVis); canvas.remove();
+      },
+      set: function (k, v) { o[k] = v; }
+    };
+  }
+
+  global.Velaris = { mount: mount };
+})(window);
+
 /* =====================================================================
    ENHANCEMENT LAYER · motion choreography
    Vanilla, no libraries: the site already runs its own inertial scroller and
@@ -6,7 +218,7 @@ try{
    transform, opacity or filter, and stands down for prefers-reduced-motion.
    ===================================================================== */
 
-}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 0: "+(e&&e.message||e))}
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 1: "+(e&&e.message||e))}
 try{
 (function () {
   "use strict";
@@ -14,12 +226,20 @@ try{
   var fine = matchMedia("(hover: hover) and (pointer: fine)").matches;
   function $$(s, c) { return [].slice.call((c || document).querySelectorAll(s)); }
   var pending = [];
+  // run cb once every image inside el is decoded, or after 700ms at most, so nothing ever fades in half-loaded
+  function ready(el, cb) {
+    var imgs = [].slice.call(el.tagName === "IMG" ? [el] : el.querySelectorAll("img")).filter(function (im) { return !(im.complete && im.naturalWidth); });
+    if (!imgs.length || !("decode" in Image.prototype)) { cb(); return; }
+    var done = false, go = function () { if (!done) { done = true; cb(); } };
+    Promise.all(imgs.map(function (im) { im.loading = "eager"; return im.decode().catch(function () {}); })).then(go);
+    setTimeout(go, 700);
+  }
   function once(els, cb, margin) {
     if (!("IntersectionObserver" in window) || reduce) { els.forEach(cb); return; }
     var io = new IntersectionObserver(function (es) {
       es.forEach(function (e) { if (e.isIntersecting) fire(e.target); });
     }, { rootMargin: margin || "0px 0px -12% 0px", threshold: 0 });
-    function fire(el) { if (el.__done) return; el.__done = true; io.unobserve(el); cb(el); }
+    function fire(el) { if (el.__done) return; el.__done = true; io.unobserve(el); ready(el, function () { cb(el); }); }
     els.forEach(function (el) { io.observe(el); pending.push({ el: el, fire: fire }); });
   }
   // safety net: a fast flick or a menu jump can skip past an element between observer ticks;
@@ -33,7 +253,10 @@ try{
       return true;
     });
   }
-  addEventListener("scroll", function () { if (!sweepT) sweepT = setTimeout(sweep, 120); }, { passive: true });
+  var sweepAt = 0;
+  function sweepTick() { var now = performance.now(); if (now - sweepAt > 140 && pending.length) { sweepAt = now; sweep(); } }
+  (window.__frame ? window.__frame.add(sweepTick) : addEventListener("scroll", sweepTick, { passive: true }));
+  addEventListener("scroll", function () { clearTimeout(sweepT); sweepT = setTimeout(sweep, 160); }, { passive: true });
 
   /* ---------- film grain (signature) ---------- */
   /* (film grain removed: a full-screen animated layer cost too much on everyday laptops) */
@@ -107,7 +330,7 @@ try{
         o.el.style.setProperty("--gy", (p * 90).toFixed(1) + "px");
       });
     };
-    addEventListener("scroll", function () { if (!tk) { tk = true; requestAnimationFrame(drift); } }, { passive: true });
+    (window.__frame ? window.__frame.add(drift) : addEventListener("scroll", drift, { passive: true }));
     drift();
   }
 
@@ -214,7 +437,7 @@ try{
       for (var i = 0; i < tbSecs.length; i++) { if (tbSecs[i].getBoundingClientRect().top <= mid) found = tbSecs[i]; else break; }
       show(found);
     }
-    addEventListener("scroll", function () { if (!tbTick) { tbTick = true; requestAnimationFrame(scan); } }, { passive: true });
+    (window.__frame ? window.__frame.add(scan) : addEventListener("scroll", scan, { passive: true }));
     addEventListener("resize", place);
     tb.addEventListener("pointerenter", function () { hover = true; tb.classList.add("open"); });
     tb.addEventListener("pointerleave", function () { hover = false; if (!pinned) openFor(900); });
@@ -313,7 +536,7 @@ try{
         pts.forEach(function (x, k) { x.classList.toggle("now", k === i); });
       }
     }
-    addEventListener("scroll", function () { if (!tick) { tick = true; requestAnimationFrame(run); } }, { passive: true });
+    (window.__frame ? window.__frame.add(run) : addEventListener("scroll", run, { passive: true }));
     addEventListener("resize", run); run();
   });
 
@@ -434,30 +657,17 @@ try{
     function mixH(a, b, t) { var d = ((b - a + 540) % 360) - 180; return (a + d * t + 360) % 360; }
     function mix(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, mixH(a[2], b[2], t)]; }
     function css(c, l, k) { return "oklch(" + (l != null ? l : c[0]).toFixed(1) + "% " + (c[1] * (k || 1)).toFixed(3) + " " + c[2].toFixed(1) + ")"; }
-    var aT = false;
+    // the page is black now: no colour engine. Only the faint smoke drifts with the scroll,
+    // written as a transform on a composited layer and only when it moved by a pixel or more
+    var smA = amb.appendChild(document.createElement("b")), smB = amb.appendChild(document.createElement("b"));
+    smA.className = "smk a"; smB.className = "smk b";
+    var lastY = -1e9;
     function ambRun() {
-      aT = false; var mid = innerHeight * 0.5, i = -1;
-      for (var k = 0; k < ambSecs.length; k++) { if (ambSecs[k].getBoundingClientRect().top <= mid) i = k; else break; }
-      var A = pal[Math.max(0, i)], e = 0;
-      if (i >= 0) {
-        var top = ambSecs[i].getBoundingClientRect().top, nx = ambSecs[i + 1];
-        var end = nx ? nx.getBoundingClientRect().top : ambSecs[i].getBoundingClientRect().bottom;
-        var sm = function (a, b, x) { x = Math.max(0, Math.min(1, (x - a) / (b - a))); return x * x * (3 - 2 * x); };
-        // colour lives inside a project; every hand-over passes through black, over about half a screen each side
-        var r = innerHeight * 0.55, len = end - top;
-        if (len < r * 2.2) r = len / 2.2;
-        e = sm(0, r, mid - top) * (1 - sm(-r, 0, mid - end));
-      }
-      var base = 15, lift = function (c, L) { return [base, 0, c[2]]; };
-      amb.style.setProperty("--a0", css(lift(A[0], 16.5), null, 0.38));
-      amb.style.setProperty("--a1", css(lift(A[0], A[0][0])));
-      amb.style.setProperty("--a2", css(lift(A[1], A[1][0])));
-      amb.style.setProperty("--ae", e.toFixed(3));
-      amb.style.setProperty("--smk", (-scrollY * 0.04 % 400).toFixed(1) + "px"); amb.style.setProperty("--smk2", (-scrollY * 0.07 % 500).toFixed(1) + "px");
+      var y = scrollY; if (Math.abs(y - lastY) < 2) return; lastY = y;
+      smA.style.transform = "translate3d(0," + (Math.sin(y * 0.0007) * 90).toFixed(0) + "px,0) scale(1.15)";
+      smB.style.transform = "translate3d(0," + (Math.sin(y * 0.0005 + 1) * 120).toFixed(0) + "px,0) scale(-1.3,1.3)";
     }
-    addEventListener("scroll", function () { if (!aT) { aT = true; requestAnimationFrame(ambRun); } }, { passive: true });
-    addEventListener("resize", ambRun);
-    ambRun();
+    // smoke switched off (pure black page): nothing to run per frame
   }
 
 
@@ -474,26 +684,39 @@ try{
         g.style.setProperty("--py", (p * -28).toFixed(1) + "px");
       });
     };
-    addEventListener("scroll", function () { if (!gT) { gT = true; requestAnimationFrame(gRun); } }, { passive: true });
+    (window.__frame ? window.__frame.add(gRun) : addEventListener("scroll", gRun, { passive: true }));
     gRun();
   }
 
   /* ---------- failsafe: nothing stays hidden. Anything already on or above the screen is revealed,
      whatever the observers did (embedded viewers, fast jumps, odd browsers) ---------- */
+  var fsList = null, fsTimer = null;
+  var isHead = function (el) { return /^(H2|H3|H4)$/.test(el.tagName) || el.classList.contains("tagline"); };
+  var isGroup = function (el) { return el.matches(".crs-grid, .cards, .bb-grid, .mhl-grid, .eco-pts, .feat3, .lv-legend, .pillars"); };
+  function shown(el) {
+    if (el.classList.contains("gx")) return el.classList.contains("gx-in");
+    var ok = true;
+    if (el.matches(".reveal, .rise")) ok = ok && el.classList.contains("in");
+    if (isHead(el) && el.querySelector(".hw")) ok = ok && el.classList.contains("words-in");
+    if (isGroup(el)) ok = ok && el.classList.contains("st-on");
+    return ok;
+  }
   function failsafe() {
     var vh = innerHeight;
-    $$(".reveal:not(.in), .rise:not(.in), .gx:not(.gx-in)").forEach(function (el) {
-      if (el.getBoundingClientRect().top < vh * 0.98) el.classList.add(el.classList.contains("gx") ? "gx-in" : "in");
+    if (!fsList) fsList = $$(".reveal, .rise, .gx, .crs-grid, .cards, .bb-grid, .mhl-grid, .eco-pts, .feat3, .lv-legend, .pillars, h2, h3, h4, .tagline");
+    fsList = fsList.filter(function (el) { return !shown(el); });
+    if (!fsList.length) { if (fsTimer) { clearInterval(fsTimer); fsTimer = null; } return; }
+    fsList.forEach(function (el) {
+      if (el.getBoundingClientRect().top >= vh * 0.98) return;
+      if (el.classList.contains("gx")) { el.classList.add("gx-in"); return; }
+      if (el.matches(".reveal, .rise")) el.classList.add("in");
+      if (isHead(el) && el.querySelector(".hw")) el.classList.add("words-in");
+      if (isGroup(el)) el.classList.add("st-on");
     });
-    $$(".crs-grid, .cards, .bb-grid, .mhl-grid, .eco-pts, .feat3, .lv-legend, .pillars").forEach(function (g) {
-      if (!g.classList.contains("st-on") && g.getBoundingClientRect().top < vh * 0.98) g.classList.add("st-on");
-    });
-    $$(".words-in").length;
-    $$("h3, h4, h2, .tagline").forEach(function (h) { if (h.querySelector(".hw") && !h.classList.contains("words-in") && h.getBoundingClientRect().top < vh * 0.98) h.classList.add("words-in"); });
   }
   var fsT = null;
   addEventListener("scroll", function () { clearTimeout(fsT); fsT = setTimeout(failsafe, 180); }, { passive: true });
-  setInterval(failsafe, 1500);
+  fsTimer = setInterval(failsafe, 1500);
   addEventListener("load", function () { setTimeout(failsafe, 600); });
 
   if (!fine || reduce) return;
@@ -521,4 +744,439 @@ try{
   });
 })();
 
-}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 1: "+(e&&e.message||e))}
+/* BoJack Pilot: words and boarding pass arrive in order, the art drifts as if still falling,
+   and a teal thread stitches the four process steps together as you scroll */
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 2: "+(e&&e.message||e))}
+try{
+(function () {
+  var sec = document.querySelector(".bjx"); if (!sec) return;
+  var still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var top = sec.querySelector(".bjx-top"), art = sec.querySelector(".bjx-art img"), brief = sec.querySelector(".bjx-brief"),
+      steps = sec.querySelector(".bjx-steps"), frames = [].slice.call(sec.querySelectorAll(".bjx-steps .frame"));
+  function on(el, cls, margin) {
+    if (!el) return;
+    if (still || !("IntersectionObserver" in window)) { el.classList.add(cls); return; }
+    var io = new IntersectionObserver(function (es) { es.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add(cls); io.disconnect(); } }); }, { rootMargin: margin || "0px 0px -15% 0px" });
+    io.observe(el);
+  }
+  // the reveal class sits on the section so the CSS can stagger everything inside the top block
+  if (top) {
+    if (still || !("IntersectionObserver" in window)) sec.classList.add("bjx-on");
+    else { var io = new IntersectionObserver(function (es) { if (es[0].isIntersecting) { sec.classList.add("bjx-on"); io.disconnect(); } }, { rootMargin: "0px 0px -20% 0px" }); io.observe(top); }
+  }
+  on(brief, "on");
+  // thread: built to the real width, knots above each frame
+  var NS = "http://www.w3.org/2000/svg", svg = null, path = null, knots = [], len = 0, xs = [];
+  function build() {
+    if (!steps || innerWidth <= 900) { if (svg) { svg.remove(); svg = null; } frames.forEach(function (f) { on(f, "on", "0px 0px -8% 0px"); }); return; }
+    var W = steps.clientWidth, H = parseFloat(getComputedStyle(steps).getPropertyValue("--th")) || 44;
+    if (!svg) { svg = document.createElementNS(NS, "svg"); svg.setAttribute("class", "bjx-thread"); svg.setAttribute("aria-hidden", "true"); steps.insertBefore(svg, steps.firstChild); }
+    H = svg.getBoundingClientRect().height || 44;
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H); svg.innerHTML = "";
+    xs = frames.map(function (f) { return f.offsetLeft + f.offsetWidth / 2; });
+    var y = H * 0.55, a = H * 0.38, d = "M0," + y.toFixed(1);
+    // a loose running stitch: dips between knots, rests on each knot
+    for (var i = 0; i < xs.length; i++) {
+      var x0 = i === 0 ? 0 : xs[i - 1], x1 = xs[i], mx = (x0 + x1) / 2;
+      d += " Q" + mx.toFixed(1) + "," + (y + (i % 2 ? -a : a)).toFixed(1) + " " + x1.toFixed(1) + "," + y.toFixed(1);
+    }
+    d += " Q" + ((xs[xs.length - 1] + W) / 2).toFixed(1) + "," + (y - a).toFixed(1) + " " + W + "," + y.toFixed(1);
+    path = document.createElementNS(NS, "path"); path.setAttribute("d", d); svg.appendChild(path);
+    len = path.getTotalLength(); path.style.strokeDasharray = len.toFixed(1) + " " + len.toFixed(1);
+    knots = xs.map(function (x) { var c = document.createElementNS(NS, "circle"); c.setAttribute("class", "knot"); c.setAttribute("cx", x.toFixed(1)); c.setAttribute("cy", y.toFixed(1)); c.setAttribute("r", "4.5"); svg.appendChild(c); return c; });
+    last = -1; tick();
+  }
+  var last = -1;
+  function tick() {
+    var vh = innerHeight;
+    if (art && !still) {
+      var r = sec.getBoundingClientRect();
+      if (r.bottom > 0 && r.top < vh) {
+        var t = Math.max(-1, Math.min(1, (r.top + Math.min(r.height, vh * 1.4) / 2 - vh / 2) / vh));   // -1..1 across the pass
+        art.style.transform = "translate3d(0," + (t * -40).toFixed(1) + "px,0) rotate(" + (t * -3.2).toFixed(2) + "deg)";
+      }
+    }
+    if (!svg || !path) return;
+    var sr = steps.getBoundingClientRect(); if (sr.bottom < -100 || sr.top > vh + 100) return;
+    var p = still ? 1 : Math.max(0, Math.min(1, (vh * 0.95 - sr.top) / (vh * 0.5)));
+    if (Math.abs(p - last) < 0.0005) return; last = p;
+    path.style.strokeDashoffset = (len * (1 - p)).toFixed(1);
+    var reach = p * steps.clientWidth;
+    xs.forEach(function (x, i) { var hit = reach >= x - 4; knots[i].classList.toggle("on", hit); if (hit) frames[i].classList.add("on"); });
+  }
+  build();
+  var rt; addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(build, 200); });
+  addEventListener("load", build);
+  (window.__frame ? window.__frame.add(tick) : addEventListener("scroll", tick, { passive: true }));
+})();
+
+/* Pinned section bar: turns solid once you leave the cover, and a pill slides to the sector you are in */
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 3: "+(e&&e.message||e))}
+try{
+(function () {
+  var nav = document.getElementById("nav"), cats = document.getElementById("cats"); if (!nav || !cats) return;
+  var links = [].slice.call(cats.querySelectorAll(".cat")), ind = cats.querySelector(".cat-ind");
+  // which bar item each chapter belongs to (Level Concept sits under 3D)
+  var map = { film: "film", systems: "systems", web: "web", direction: "direction", illustration: "illustration", textile: "textile", branding: "branding", "three-d": "three-d", level: "three-d" };
+  var chapters = Object.keys(map).map(function (id) { return document.getElementById(id); }).filter(Boolean);
+  var stops = [document.getElementById("about"), document.getElementById("contact")].filter(Boolean);
+  var cur = null, solid = null;
+  function place(a) {
+    if (!a) { cats.classList.remove("has-on"); return; }
+    cats.classList.add("has-on");
+    ind.style.transform = "translate3d(" + a.offsetLeft + "px,0,0) scaleX(" + (a.offsetWidth / 100).toFixed(4) + ")";
+    // on narrow screens the bar scrolls sideways: keep the active item in view
+    if (cats.scrollWidth > cats.clientWidth + 2) {
+      var want = a.offsetLeft - (cats.clientWidth - a.offsetWidth) / 2;
+      cats.scrollTo({ left: Math.max(0, want), behavior: "smooth" });
+    }
+  }
+  function tick() {
+    var y = scrollY, vh = innerHeight;
+    var s = y > 40; if (s !== solid) { solid = s; nav.classList.toggle("nav-solid", s); }
+    var line = vh * 0.42, found = null;
+    for (var i = 0; i < chapters.length; i++) { if (chapters[i].getBoundingClientRect().top <= line) found = chapters[i]; else break; }
+    for (var j = 0; j < stops.length; j++) { if (stops[j].getBoundingClientRect().top <= line) found = null; }
+    var k = found ? map[found.id] : null;
+    if (k === cur) return; cur = k;
+    var a = null; links.forEach(function (l) { var on = l.getAttribute("data-k") === k; l.classList.toggle("on", on); if (on) { a = l; l.setAttribute("aria-current", "true"); } else l.removeAttribute("aria-current"); });
+    place(a);
+  }
+  (window.__frame ? window.__frame.add(tick) : addEventListener("scroll", tick, { passive: true }));
+  addEventListener("resize", function () { var a = cats.querySelector(".cat.on"); if (a) place(a); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { var a = cats.querySelector(".cat.on"); if (a) place(a); });
+  tick();
+})();
+
+/* Web & UI build: one browser goes from brief to live as the pinned scene scrolls */
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 4: "+(e&&e.message||e))}
+try{
+(function () {
+  var sec = document.querySelector(".wb"); if (!sec) return;
+  var stage = sec.querySelector(".wb-stage"), now = sec.querySelector(".wb-now"), rail = [].slice.call(sec.querySelectorAll(".wb-rail li")), prog = sec.querySelector(".wb-prog");
+  var nEl = now.querySelector(".wb-n"), tEl = now.querySelector(".wb-t"), dEl = now.querySelector(".wb-d");
+  var steps = [
+    ["01", "Brief", "Goals, audience and content, agreed before any pixel."],
+    ["02", "Structure", "Sitemap and wireframes: what goes where, and why."],
+    ["03", "Visual design", "Type, colour and imagery, built as one system from your brand."],
+    ["04", "Motion and build", "Interaction, transitions and layouts for every screen size."],
+    ["05", "Launch", "Live on your domain, checked on desktop and phone."]
+  ];
+  var still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var at = [0.02, 0.2, 0.4, 0.6, 0.8], cur = -1, swapT = null;
+  function show(i) {
+    if (i === cur) return; cur = i;
+    stage.setAttribute("data-s", String(i + 1));
+    rail.forEach(function (li, k) { li.classList.toggle("on", k <= i); });
+    var st = steps[Math.max(0, i)];
+    clearTimeout(swapT); now.classList.add("swap");
+    swapT = setTimeout(function () { nEl.textContent = st[0]; tEl.textContent = st[1]; dEl.textContent = st[2]; now.classList.remove("swap"); }, 220);
+  }
+  if (still) { show(4); prog.style.setProperty("--p", 1); return; }
+  function tick() {
+    var r = sec.getBoundingClientRect(), vh = innerHeight; if (r.bottom < -100 || r.top > vh + 100) return;
+    var span = sec.offsetHeight - vh, p = span > 0 ? Math.max(0, Math.min(1, -r.top / span)) : 1;
+    prog.style.setProperty("--p", p.toFixed(4));
+    var i = 0; for (var k = 0; k < at.length; k++) if (p >= at[k]) i = k;
+    show(i);
+  }
+  (window.__frame ? window.__frame.add(tick) : addEventListener("scroll", tick, { passive: true }));
+  tick();
+})();
+
+/* Handmade Rugs opener: the black fabric drifts with the scroll and a soft light runs along its folds */
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 5: "+(e&&e.message||e))}
+try{
+(function () {
+  var ch = document.getElementById("textile"); if (!ch) return;
+  var mv = ch.querySelector(".fab-move"), sh = ch.querySelector(".fab-sheen b"); if (!mv || !sh) return;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  function run() {
+    var r = ch.getBoundingClientRect(), vh = innerHeight; if (r.bottom < -100 || r.top > vh + 100) return;
+    var p = Math.max(0, Math.min(1, (vh - r.top) / (vh + r.height)));           // 0 entering .. 1 leaving
+    mv.style.setProperty("--fy", ((p - 0.5) * -90).toFixed(1) + "px");
+    mv.style.setProperty("--fr", ((p - 0.5) * 2.4).toFixed(2) + "deg");
+    sh.style.setProperty("--sx", (-38 + p * 76).toFixed(2) + "%");
+  }
+  (window.__frame ? window.__frame.add(run) : addEventListener("scroll", run, { passive: true })); run();
+})();
+
+/* Gorilla still: fade the framed flat-lay in once */
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 6: "+(e&&e.message||e))}
+try{
+(function () {
+  var f = document.querySelector(".gxs-f"); if (!f) return;
+  if (!("IntersectionObserver" in window)) { f.classList.add("on"); return; }
+  var io = new IntersectionObserver(function (es) { es.forEach(function (x) { if (x.isIntersecting) { f.classList.add("on"); io.disconnect(); } }); }, { rootMargin: "0px 0px -12% 0px" });
+  io.observe(f);
+})();
+
+/* Instinct: three reference nodes wire into the final frame as the scene scrolls; then the frames change */
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 7: "+(e&&e.message||e))}
+try{
+(function () {
+  var sec = document.querySelector(".inw"); if (!sec) return;
+  var stage = sec.querySelector(".inw-stage"), svg = sec.querySelector(".inw-links");
+  var nodes = [].slice.call(sec.querySelectorAll(".inw-node")), out = sec.querySelector(".inw-out");
+  var frames = [].slice.call(sec.querySelectorAll(".inw-frames img")), count = sec.querySelector(".inw-count");
+  var still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var NS = "http://www.w3.org/2000/svg", links = [], ghosts = [], dots = [], lens = [];
+  function pt(el, side) {
+    var s = stage.getBoundingClientRect(), r = el.getBoundingClientRect();
+    return [r.left + r.width / 2 - s.left, r.top + r.height / 2 - s.top];
+  }
+  function build() {
+    var W = stage.clientWidth, H = stage.clientHeight; svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.innerHTML = '<defs><linearGradient id="inwG" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#c9a173" stop-opacity=".35"/><stop offset=".55" stop-color="#e7c9a0"/><stop offset="1" stop-color="#f3dfc3"/></linearGradient></defs>';
+    links = []; ghosts = []; dots = []; lens = [];
+    var ins = [].slice.call(out.querySelectorAll(".port")), vertical = innerWidth <= 860;
+    nodes.forEach(function (n, i) {
+      var a = pt(n.querySelector(".port")), b = pt(ins[i]), d;
+      if (vertical) { var my = (a[1] + b[1]) / 2; d = "M" + a[0] + "," + a[1] + " C" + a[0] + "," + my + " " + b[0] + "," + my + " " + b[0] + "," + b[1]; }
+      else { var mx = a[0] + (b[0] - a[0]) * 0.55; d = "M" + a[0] + "," + a[1] + " C" + mx + "," + a[1] + " " + (b[0] - (b[0] - a[0]) * 0.35) + "," + b[1] + " " + b[0] + "," + b[1]; }
+      var g = document.createElementNS(NS, "path"); g.setAttribute("d", d); g.setAttribute("class", "ghost"); svg.appendChild(g);
+      var p = document.createElementNS(NS, "path"); p.setAttribute("d", d); svg.appendChild(p);
+      var L = p.getTotalLength(); p.style.strokeDasharray = L + " " + L; p.style.strokeDashoffset = L;
+      var c = document.createElementNS(NS, "circle"); c.setAttribute("r", "3.2"); c.style.opacity = 0; svg.appendChild(c);
+      links.push(p); ghosts.push(g); dots.push(c); lens.push(L);
+    });
+    last = -1; run();
+  }
+  var last = -1, curF = -1;
+  function clamp(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+  function run() {
+    var r = sec.getBoundingClientRect(), vh = innerHeight; if (r.bottom < -100 || r.top > vh + 100) return;
+    var span = sec.offsetHeight - vh, p = still ? 1 : clamp((-r.top + vh * 0.35) / (span + vh * 0.35));
+    if (Math.abs(p - last) < 0.0004) return; last = p;
+    nodes.forEach(function (n, i) { n.classList.toggle("on", p > 0.02 + i * 0.05); });
+    links.forEach(function (l, i) {
+      var k = clamp((p - (0.14 + i * 0.07)) / 0.2);
+      l.style.strokeDashoffset = (lens[i] * (1 - k)).toFixed(1);
+      nodes[i].classList.toggle("lit", k > 0 && k < 1 || p > 0.5);
+      // a bead of light runs along each wire while it is live
+      var dk = p < 0.14 + i * 0.07 ? -1 : (k < 1 ? k : ((p * 3 + i * 0.33) % 1));
+      if (dk < 0) { dots[i].style.opacity = 0; }
+      else { var q = l.getPointAtLength(lens[i] * dk); dots[i].setAttribute("cx", q.x.toFixed(1)); dots[i].setAttribute("cy", q.y.toFixed(1)); dots[i].style.opacity = 1; }
+    });
+    out.classList.toggle("on", p > 0.36);
+    var fi = p < 0.46 ? 0 : Math.min(frames.length - 1, Math.floor((p - 0.46) / 0.54 * frames.length));
+    if (fi !== curF) { curF = fi; frames.forEach(function (im, k) { im.classList.toggle("on", k === fi); }); count.textContent = String(fi + 1).padStart(2, "0") + " / " + String(frames.length).padStart(2, "0"); }
+  }
+  build();
+  var rt; addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(build, 200); });
+  addEventListener("load", build);
+  (window.__frame ? window.__frame.add(run) : addEventListener("scroll", run, { passive: true }));
+})();
+
+/* painted edge fades for full-bleed sections (cheaper than masking moving video and parallax) */
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 8: "+(e&&e.message||e))}
+try{
+(function () {
+  [].forEach.call(document.querySelectorAll(".fsv, main > .ov, .chapter-in, .gor-stage"), function (el) {
+    if (el.querySelector(":scope > .edge")) return;
+    if (getComputedStyle(el).position === "static") el.style.position = "relative";
+    var e = document.createElement("i"); e.className = "edge"; e.setAttribute("aria-hidden", "true");
+    // sits just above the background layer, so everything that comes after it (text, figures) stays on top
+    var bg = el.querySelector(":scope > .bg:last-of-type, :scope > .ov-bg, :scope > .gor-bg, :scope > video");
+    if (el.classList.contains("chapter-in")) { var bgs = el.querySelectorAll(":scope > .bg"); bg = bgs.length ? bgs[bgs.length - 1] : null; }
+    if (bg && bg.nextSibling) el.insertBefore(e, bg.nextSibling); else if (bg) el.appendChild(e); else el.insertBefore(e, el.firstChild);
+  });
+})();
+
+/* Sla v2: three parts. Each part's pieces slide in from their own side (left, right, top, bottom) with the copy
+   for that part, settle, then lift away as the next part arrives. Progress is smoothed per frame so it glides. */
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 9: "+(e&&e.message||e))}
+try{
+(function () {
+  var sec = document.querySelector(".slx"); if (!sec) return;
+  var run = sec.querySelector(".slx-run"), objs = [].slice.call(sec.querySelectorAll(".slx-o"));
+  var texts = [].slice.call(sec.querySelectorAll(".slx-t")), ticks = [].slice.call(sec.querySelectorAll(".slx-ticks i"));
+  var N = texts.length, still = matchMedia("(prefers-reduced-motion: reduce)").matches; if (still) return;
+  var cnt = {};
+  var data = objs.map(function (o) { var cs = o.style, s = +o.getAttribute("data-s"); cnt[s] = (cnt[s] || 0); var k = cnt[s]++;
+    return { el: o, s: s, k: k, from: o.getAttribute("data-from") || "b", d: parseFloat(cs.getPropertyValue("--d")) || 1, r: parseFloat(cs.getPropertyValue("--r")) || 0, vis: false }; });
+  var tdata = texts.map(function (t) { return { el: t, s: +t.getAttribute("data-s"), side: t.getAttribute("data-side") === "r" ? 1 : -1, kids: [].slice.call(t.children), vis: false }; });
+  function clamp(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+  function eo(t) { return 1 - Math.pow(1 - t, 4); }            // ease-out quart: arrives fast, lands softly
+  function ei(t) { return t * t * (3 - 2 * t); }               // smoothstep for exits
+  var fs = null, target = 0, lt = 0, raf = 0, cur = -1;
+  function enterOf(q, s, k) { var a = s === 0 ? -0.75 : -0.42; return eo(clamp((q - a - k * 0.08) / 0.6)); }
+  function exitOf(q, s) { return s === N - 1 ? 0 : ei(clamp((q - 0.62) / 0.4)); }
+  function paint(f) {
+    var vw = innerWidth, vh = innerHeight, mob = vw <= 800;
+    var dx = mob ? 0.75 * vw : 0.55 * vw, dy = mob ? 0.6 * vh : 0.7 * vh;
+    data.forEach(function (o) {
+      var q = f - o.s, inn = enterOf(q, o.s, o.k), out = exitOf(q, o.s), op = Math.min(inn, 1 - out);
+      var m = (1 - inn) * o.d, x = 0, y = 0;
+      if (o.from === "l") x = -dx * m; else if (o.from === "r") x = dx * m; else if (o.from === "t") y = -dy * m; else y = dy * m;
+      y += -0.16 * vh * out * o.d + (q - 0.3) * -0.03 * vh * o.d * (inn > 0.99 && out < 0.01 ? 1 : inn);   // lift away; slow float while held
+      var rot = o.r * (1 + 1.6 * (1 - inn)) + o.r * 0.8 * out, sc = 0.94 + 0.06 * inn - 0.04 * out;
+      var show = op > 0.004;
+      if (show !== o.vis) { o.vis = show; o.el.style.visibility = show ? "visible" : "hidden"; }
+      if (!show) return;
+      o.el.style.opacity = op.toFixed(3);
+      o.el.style.transform = "translate3d(" + x.toFixed(1) + "px," + y.toFixed(1) + "px,0) rotate(" + rot.toFixed(2) + "deg) scale(" + sc.toFixed(4) + ")";
+    });
+    tdata.forEach(function (t) {
+      var q = f - t.s, out = exitOf(q, t.s), any = false;
+      t.kids.forEach(function (c, i) {
+        var a = t.s === 0 ? -0.6 : -0.3, inn = eo(clamp((q - a - i * 0.07) / 0.45)), op = Math.min(inn, 1 - out);
+        if (op > 0.004) any = true;
+        c.style.opacity = op.toFixed(3);
+        c.style.transform = "translate3d(" + (t.side * 56 * (1 - inn)).toFixed(1) + "px," + (-22 * out).toFixed(1) + "px,0)";
+      });
+      if (any !== t.vis) { t.vis = any; t.el.style.visibility = any ? "visible" : "hidden"; }
+    });
+    var i = Math.max(0, Math.min(N - 1, Math.round(f - 0.15)));
+    if (i !== cur) { cur = i; ticks.forEach(function (x, k) { x.classList.toggle("on", k === i); }); sec.classList.toggle("not-winter", i === N - 1); }
+  }
+  function measure() {
+    var r = run.getBoundingClientRect(), vh = innerHeight, span = Math.max(1, run.offsetHeight - vh);
+    return { f: Math.max(-1.2, Math.min(N, (-r.top / span) * N)), near: r.bottom > -vh && r.top < vh * 2 };
+  }
+  function loop(now) {
+    raf = 0; var dt = Math.min(50, now - (lt || now)) / 1000; lt = now;
+    if (fs === null || Math.abs(target - fs) > 1.5) fs = target;
+    fs += (target - fs) * (1 - Math.exp(-9 * dt));
+    if (Math.abs(target - fs) < 0.0006) fs = target;
+    paint(fs);
+    if (fs !== target) raf = requestAnimationFrame(loop); else lt = 0;
+  }
+  function onFrame() { var m = measure(); if (!m.near) { fs = null; return; } target = m.f; if (!raf) raf = requestAnimationFrame(loop); }
+  (window.__frame ? window.__frame.add(onFrame) : addEventListener("scroll", onFrame, { passive: true }));
+  addEventListener("resize", function () { fs = null; onFrame(); }); onFrame();
+})();
+
+/* EcoFurChild: when the logo comes into view its outlines draw on (dog and leaf first, then the name, then the line),
+   the gold fills in, and only then the project details rise */
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 10: "+(e&&e.message||e))}
+try{
+(function () {
+  var box = document.querySelector("[data-efc]"); if (!box) return;
+  var svg = box.querySelector("svg"), paths = [].slice.call(svg.querySelectorAll("path"));
+  var vb = svg.viewBox.baseVal, H = vb.height;
+  // sort the traced shapes into symbol / wordmark / tagline by where they sit
+  var info = paths.map(function (p) { var b = p.getBBox(); return { p: p, y: b.y, h: b.height, x: b.x }; });
+  // the group is flipped (scale .1, -.1): convert to screen order with the bounding box in the svg's own space
+  info.forEach(function (o) { var r = o.p.getBoundingClientRect(), s = svg.getBoundingClientRect(); o.ty = s.height ? (r.top - s.top) / s.height : 0; o.tx = s.width ? (r.left - s.left) / s.width : 0; });
+  info.forEach(function (o) {
+    var band = o.ty < 0.42 ? 0 : o.ty < 0.82 ? 1 : 2;
+    var dl = band === 0 ? 0.1 + o.tx * 0.5 : band === 1 ? 1.1 + o.tx * 0.7 : 1.9 + o.tx * 0.5;
+    var dd = band === 0 ? 2.2 : band === 1 ? 1.2 : 0.9;
+    o.p.style.setProperty("--dl", dl.toFixed(2) + "s"); o.p.style.setProperty("--dd", dd + "s");
+    o.p.style.setProperty("--fl", (dl + dd * 0.8).toFixed(2) + "s");
+  });
+  var still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function go() {
+    box.classList.add("go");
+    setTimeout(function () { box.classList.add("done"); }, still ? 0 : 2900);
+  }
+  if (still || !("IntersectionObserver" in window)) { go(); return; }
+  var io = new IntersectionObserver(function (es) { if (es[0].isIntersecting) { io.disconnect(); requestAnimationFrame(function () { requestAnimationFrame(go); }); } }, { rootMargin: "0px 0px -25% 0px" });
+  io.observe(box);
+})();
+
+/* Sector gaps: one Velaris canvas, moved into whichever gap is on screen, with that gap's colours */
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 11: "+(e&&e.message||e))}
+try{
+(function () {
+  var gaps = [].slice.call(document.querySelectorAll(".vl-gap")); if (document.querySelector(".bgx") || /[?&]novel/.test(location.search) || !gaps.length || !window.Velaris || !("IntersectionObserver" in window)) return;
+  function stops(g) {
+    var a = g.getAttribute("data-a").split(","), b = g.getAttribute("data-b").split(",");
+    return [{ at: 0, colors: a.concat("#000000") }, { at: 1, colors: b.concat("#000000") }];
+  }
+  var inst = null, small = matchMedia("(max-width: 800px), (pointer: coarse)").matches;
+  // phones and tablets: the same colours as a painted glow that drifts slowly (no WebGL, nothing per frame)
+  if (small) {
+    gaps.forEach(function (g) {
+      var a = g.getAttribute("data-a").split(","), b = g.getAttribute("data-b").split(",");
+      var i = document.createElement("i"); i.className = "vl-css";
+      i.style.backgroundImage = "radial-gradient(ellipse 55% 60% at 30% 45%," + a[2] + " 0%,transparent 70%),radial-gradient(ellipse 60% 65% at 70% 55%," + b[2] + " 0%,transparent 72%),radial-gradient(ellipse 80% 70% at 50% 50%," + b[0] + " 0%,transparent 80%)";
+      g.insertBefore(i, g.firstChild);
+    });
+    return;
+  }
+  var io = new IntersectionObserver(function (es) {
+    es.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      var g = e.target;
+      if (!inst) inst = Velaris.mount(g, { stops: stops(g), speed: 0.4, travel: 4, grain: 0.12, intensity: 0.85, edgeFade: 0.3, res: 0.5, bg: "#0b0b0c" });
+      else inst.retarget(g, { stops: stops(g) });
+    });
+  }, { rootMargin: "35% 0px" });
+  gaps.forEach(function (g) { io.observe(g); });
+})();
+
+/* One black, smoky background behind the whole site. It drifts on its own (CSS) and moves a little as you scroll
+   through the sectors, smoothed per frame. Only transform changes: no blend modes, no masks, no repaint. */
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 12: "+(e&&e.message||e))}
+try{
+(function () {
+  var bx = document.querySelector(".bgx"); if (!bx) return;
+  document.documentElement.classList.add("bgx-on");
+  var inner = bx.querySelector(".bgx-in"), still = matchMedia("(prefers-reduced-motion: reduce)").matches; if (still) return;
+  var tx = 0, ty = 0, cx = 0, cy = 0, raf = 0, lt = 0;
+  function target() {
+    var max = Math.max(1, document.documentElement.scrollHeight - innerHeight), p = scrollY / max;
+    tx = Math.sin(p * Math.PI * 7) * 5;            // drifts side to side as each sector passes (in %)
+    ty = -p * 14;                                   // and slowly rises through the page
+  }
+  function step(now) {
+    raf = 0; var dt = Math.min(50, lt ? now - lt : 16) / 1000; lt = now; var k = 1 - Math.exp(-3 * dt);
+    cx += (tx - cx) * k; cy += (ty - cy) * k;
+    inner.style.transform = "translate3d(" + cx.toFixed(3) + "%," + cy.toFixed(3) + "%,0)";
+    if (Math.abs(tx - cx) + Math.abs(ty - cy) > 0.01) raf = requestAnimationFrame(step); else lt = 0;
+  }
+  function onScroll() { target(); if (!raf) raf = requestAnimationFrame(step); }
+  (window.__frame ? window.__frame.add(onScroll) : addEventListener("scroll", onScroll, { passive: true }));
+  target(); cx = tx; cy = ty; inner.style.transform = "translate3d(" + cx + "%," + cy + "%,0)";
+})();
+
+/* The smoke takes on the colour of the sector you are in: two tinted copies of the same smoke crossfade
+   (opacity only), so the colour change is slow and smooth. Colours come from each project's own palette. */
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 13: "+(e&&e.message||e))}
+try{
+(function () {
+  var t1 = document.querySelector(".bgx-s.t1"), t2 = document.querySelector(".bgx-s.t2"); if (!t1 || !t2) return;
+  var F = {
+    neutral: "assets/img/smk-neutral.webp", amber: "assets/img/smk-amber.webp", gold: "assets/img/smk-gold.webp", steel: "assets/img/smk-steel.webp",
+    orange: "assets/img/smk-orange.webp", tan: "assets/img/smk-tan.webp", teal: "assets/img/smk-teal.webp", burgundy: "assets/img/smk-burgundy.webp",
+    cyan: "assets/img/smk-cyan.webp", goldbrown: "assets/img/smk-goldbrown.webp", navy: "assets/img/smk-navy.webp", silver: "assets/img/smk-silver.webp", green: "assets/img/smk-green.webp"
+  };
+  var stops = [[".hero", "neutral"], ["#film", "amber"], ["#systems", "gold"], ["#web", "steel"], ["#direction", "orange"], [".inw", "tan"],
+    ["#illustration", "teal"], ["#textile", "burgundy"], [".bjx", "cyan"], ["#branding", "goldbrown"], [".slx", "navy"], [".majesty", "silver"],
+    ["#three-d", "silver"], ["#level", "green"], ["#about", "neutral"]].map(function (s) { return { el: document.querySelector(s[0]), c: s[1] }; }).filter(function (s) { return s.el; });
+  var front = t1, back = t2, cur = "", want = "", busy = false, loaded = {};
+  function load(c) { if (loaded[c]) return loaded[c]; var im = new Image(); im.src = F[c]; loaded[c] = (im.decode ? im.decode() : Promise.resolve()).catch(function () {}); return loaded[c]; }
+  function show(c) {
+    want = c; if (busy || c === cur) return; busy = true;
+    load(c).then(function () {
+      back.style.backgroundImage = "url(" + F[c] + ")";
+      back.classList.add("vis"); front.classList.remove("vis");
+      var t = front; front = back; back = t; cur = c;
+      setTimeout(function () { busy = false; if (want !== cur) show(want); }, 1900);
+    });
+  }
+  function pick() {
+    var line = innerHeight * 0.55, c = stops[0].c;
+    for (var i = 0; i < stops.length; i++) { if (stops[i].el.getBoundingClientRect().top < line) c = stops[i].c; else break; }
+    if (c !== want) show(c);
+  }
+  front.style.backgroundImage = "url(" + F.neutral + ")"; front.classList.add("vis"); cur = want = "neutral"; loaded.neutral = Promise.resolve();
+  (window.__frame ? window.__frame.add(pick) : addEventListener("scroll", pick, { passive: true })); pick();
+  addEventListener("load", function () { setTimeout(function () { Object.keys(F).forEach(load); }, 2500); });
+})();
+
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 14: "+(e&&e.message||e))}

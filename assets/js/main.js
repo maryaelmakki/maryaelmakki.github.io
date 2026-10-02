@@ -1,6 +1,17 @@
 try{
 /* If the page is shown inside a viewer that scrolls an inner element instead of the window, relay those scrolls so every scroll-linked animation still runs */
 document.addEventListener("scroll", function (e) { if (e.target !== document) window.dispatchEvent(new Event("scroll")); }, { capture: true, passive: true });
+/* one shared frame loop: every scroll-linked effect runs inside a single animation frame, and only while the page is actually moving */
+window.__frame = (function(){
+  var fns = [], queued = false;
+  function run(){ queued = false; var prof = window.__prof;
+    for (var i = 0; i < fns.length; i++) { var t0 = prof ? performance.now() : 0;
+      try { fns[i]() } catch (e) { (window.__siteErrs = window.__siteErrs || []).push("frame: " + (e && e.message || e)) }
+      if (prof) { prof[i] = (prof[i] || 0) + performance.now() - t0 } } }
+  function kick(){ if (!queued) { queued = true; requestAnimationFrame(run) } }
+  addEventListener("scroll", kick, { passive: true }); addEventListener("resize", kick);
+  return { add: function(f){ fns.push(f) }, kick: kick };
+})();
 
 }catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 0: "+(e&&e.message||e))}
 try{
@@ -19,18 +30,33 @@ try{
     var y0 = window.scrollY, t0 = performance.now(), d = y - y0;
     (function f(now){ var k = Math.min(1, (now - t0) / dur); k = k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2; window.scrollTo(0, y0 + d * k); if (k < 1) requestAnimationFrame(f) })(t0);
   }
+  function replay(ch){
+    if (!ch || reduce) return;
+    ch.classList.remove("on", "replay"); void ch.offsetWidth;
+    ch.classList.add("replay", "on");
+    clearTimeout(ch._rp); ch._rp = setTimeout(function(){ ch.classList.remove("replay") }, 2600);
+  }
   function goTo(el){
     if (!el || jumping) return;
     var y = el === document.body ? 0 : el.getBoundingClientRect().top + window.scrollY;
     var dist = Math.abs(y - window.scrollY);
+    var ch = el.classList && el.classList.contains("chapter") ? el : null;
     if (reduce) { window.scrollTo(0, y); return }
-    if (dist < innerHeight * 1.6) { glide(y, 700); return }
-    jumping = true; veil.classList.add("on");
+    if (dist < innerHeight * 1.6) { glide(y, 700); if (ch) setTimeout(function(){ replay(ch) }, 380); return }
+    jumping = true;
+    var h = ch && ch.querySelector("h2"), n = ch && ch.querySelector(".num");
+    veil.innerHTML = h ? '<p class="veil-t"><span>' + (n ? n.textContent : "") + "</span>" + h.textContent + "</p><i class=\"veil-l\"></i>" : "";
+    veil.classList.remove("out", "reset"); void veil.offsetWidth;
+    veil.classList.add("on");
     setTimeout(function(){
       window.scrollTo(0, y);
       window.dispatchEvent(new Event("scroll"));
-      setTimeout(function(){ veil.classList.remove("on"); jumping = false }, 420);
-    }, 380);
+      if (ch) replay(ch);
+      setTimeout(function(){
+        veil.classList.add("out"); veil.classList.remove("on");
+        setTimeout(function(){ veil.classList.add("reset"); veil.classList.remove("out"); jumping = false }, 820);
+      }, h ? 420 : 160);
+    }, 560);
   }
   var lenis = null;
   /* ---------- nav ---------- */
@@ -305,7 +331,6 @@ try{
       var dx = parseFloat(f.style.getPropertyValue("--dx")) || 0, sc = parseFloat(f.style.getPropertyValue("--s")) || 1;
       f.style.opacity = (.35 + .65 * t) * (.55 + .45 * sc);
       f.style.transform = "translate3d(" + (dx * (1 - t) * (100 / parseFloat(f.style.width))) + "%,0,0) scale(" + (1 + (sc - 1) * t) + ")";
-      f.style.filter = "blur(" + (5 * (1 - t)) + "px)";
     });
   }
 
@@ -315,7 +340,18 @@ try{
     scenes.forEach(function(s){ s.top = s.el.getBoundingClientRect().top + window.scrollY; s.h = s.el.offsetHeight });
     tick(true);
   }
-  var last = -1;
+  var last = -1, smoothRaf = 0, smoothT = 0;
+  function smooth(now){
+    smoothRaf = 0; var dt = Math.min(50, smoothT ? now - smoothT : 16) / 1000; smoothT = now;
+    var k = 1 - Math.exp(-10 * dt), more = false;
+    scenes.forEach(function(s){
+      if (s.tp === undefined || s.ps === s.tp) return;
+      s.ps += (s.tp - s.ps) * k;
+      if (Math.abs(s.tp - s.ps) * (s.h - vh) < 0.5) s.ps = s.tp; else more = true;
+      s.run(s.ps);
+    });
+    if (more) smoothRaf = requestAnimationFrame(smooth);
+  }
   function tick(force){
     var y = window.scrollY;
     if (y === last && force !== true) return; last = y;
@@ -323,12 +359,17 @@ try{
     bar.style.transform = "scaleX(" + (max > 0 ? y / max : 0) + ")";
     if (hero && heroWrap) { var hp = clamp(y / hero.offsetHeight); heroWrap.style.transform = "translateY(" + (-80 * hp) + "px)"; heroWrap.style.opacity = 1 - 0.8 * hp }
     if (!reduce) { if (gor) runGor(); if (pipe) runPipe(); if (mh) runMh() }
+    // every pinned scene eases toward its scroll position (frame-rate independent), so wheel steps glide
+    var need = false;
     scenes.forEach(function(s){
       var span = s.h - vh; if (span <= 0) return;
       var p = clamp((y - s.top) / span);
-      if (y + vh < s.top - 200 || y > s.top + s.h + 200) return;
-      s.run(p);
+      if (y + vh < s.top - 200 || y > s.top + s.h + 200) { s.ps = p; return; }
+      s.tp = p;
+      if (s.ps === undefined || force === true || reduce || Math.abs(p - s.ps) * span > vh * 1.5) { s.ps = p; s.run(p); return; }
+      need = true;
     });
+    if (need && !smoothRaf) { smoothT = 0; smoothRaf = requestAnimationFrame(smooth); }
     par.forEach(function(o){
       var r = o.box.getBoundingClientRect(); if (r.bottom < 0 || r.top > vh) return;
       var t = (r.top + r.height / 2 - vh / 2) / (vh / 2 + r.height / 2);
@@ -340,8 +381,8 @@ try{
       /* columns stay put: drift left gaps under the gallery */
     }
   }
-  function loop(){ tick(); requestAnimationFrame(loop) }
-  layout(); requestAnimationFrame(loop);
+  window.__frame.add(tick);
+  layout();
   var rt; window.addEventListener("resize", function(){ clearTimeout(rt); rt = setTimeout(layout, 150) });
   window.addEventListener("load", layout);
   $$("img").forEach(function(im){ if (!im.complete) im.addEventListener("load", function(){ clearTimeout(rt); rt = setTimeout(layout, 200) }, { once: true }) });
@@ -537,7 +578,7 @@ try{
     var d = ease(seg(p, .82, .95)); days.style.opacity = 1 - .7 * d; days.style.textDecoration = d > .5 ? "line-through" : "none"; mins.style.opacity = .3 + .7 * d;
   }
   geo(); run();
-  window.addEventListener("scroll", function(){ requestAnimationFrame(run) }, { passive: true });
+  window.__frame.add(run);
   window.addEventListener("resize", function(){ geo(); run() });
   window.addEventListener("load", function(){ geo(); run() });
 })();
@@ -613,7 +654,7 @@ try{
     var pt = path.getPointAtLength(len * p); dot.setAttribute("cx", pt.x); dot.setAttribute("cy", pt.y); dot.style.opacity = p > 0 && p < 1 ? 1 : 0;
     var headY = pt.y; pins.forEach(function(pn, i){ pn.classList.toggle("lit", headY >= stops[i] - 4 || p >= 1) });
   }
-  window.addEventListener("scroll", function(){ requestAnimationFrame(run) }, { passive: true });
+  window.__frame.add(run);
   window.addEventListener("resize", geo); window.addEventListener("load", geo);
   [].forEach.call(sec.querySelectorAll("img"), function(im){ if (!im.complete) im.addEventListener("load", geo) });
   geo();
@@ -656,27 +697,35 @@ try{
     var loop = [[316,455],[627,455],[627,237],[338,237],[316,300],[316,455]], segs = [], total = 0;
     for (var i = 0; i < loop.length - 1; i++) { var a = loop[i], b = loop[i+1], L = Math.hypot(b[0]-a[0], b[1]-a[1]); segs.push([a, b, L]); total += L }
     var bz = null, bt0 = performance.now(), still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var camVis = false, camOn = false, camT = 0;
     var cam = function (now) {
-      var r = bgS.getBoundingClientRect();
-      if (r.bottom > 0 && r.top < innerHeight && !document.hidden) {
+      if (!camVis || document.hidden) { camOn = false; camT = 0; return; }
+      var cdt = camT ? Math.min(64, now - camT) : 16.7; camT = now;
+      {
         var dist = still ? 0 : (((now - bt0) / 1000) * 55) % total, k = 0;
         while (dist > segs[k][2]) { dist -= segs[k][2]; k++ }
         var sg = segs[k], f = dist / sg[2], x = sg[0][0] + (sg[1][0]-sg[0][0]) * f, y = sg[0][1] + (sg[1][1]-sg[0][1]) * f;
         var want = -90 - Math.atan2(sg[1][1]-sg[0][1], sg[1][0]-sg[0][0]) * 180 / Math.PI;
-        if (bz === null) bz = want; var dz = ((want - bz + 540) % 360) - 180; bz += dz * 0.03;
+        if (bz === null) bz = want; var dz = ((want - bz + 540) % 360) - 180; bz += dz * (1 - Math.pow(1 - 0.03, cdt / 16.7));
         var S = Math.max(bgS.clientWidth / 870, bgS.clientHeight / 750) * 1.15;
         bgW.style.transform = "scale(" + S.toFixed(3) + ") rotateX(64deg) rotateZ(" + bz.toFixed(2) + "deg) translate(" + (435 - x).toFixed(1) + "px," + (375 - y).toFixed(1) + "px)";
       }
       requestAnimationFrame(cam);
     };
-    requestAnimationFrame(cam);
+    var camGo = function () { if (camVis && !camOn) { camOn = true; requestAnimationFrame(cam); } };
+    if ("IntersectionObserver" in window) new IntersectionObserver(function (es) { camVis = es[0].isIntersecting; camGo(); }).observe(bgS); else { camVis = true; camGo(); }
+    document.addEventListener("visibilitychange", camGo);
   }
   var rx = 56, rz = -32, sc = 0.72, idle = true, t0 = performance.now();
   function fit(){ var W = scene.clientWidth, H = scene.clientHeight; return Math.min(W / 1000, H / 820) }
   function apply(){ world.style.transform = "scale(" + (sc * fit() / 0.72) + ") rotateX(" + rx + "deg) rotateZ(" + rz + "deg)" }
   apply();
   // gentle idle sway
-  (function sway(now){ if (idle && !document.hidden) { var r = scene.getBoundingClientRect(); if (r.bottom > 0 && r.top < innerHeight) { world.style.transition = "none"; rz = -32 + ((now - t0) / 1000) * 6; apply() } } requestAnimationFrame(sway) })(t0);
+  var swVis = false, swOn = false;
+  function sway(now){ if (!idle || !swVis || document.hidden) { swOn = false; return } world.style.transition = "none"; rz = -32 + ((now - t0) / 1000) * 6; apply(); requestAnimationFrame(sway) }
+  function swGo(){ if (idle && swVis && !swOn) { swOn = true; requestAnimationFrame(sway) } }
+  if ("IntersectionObserver" in window) new IntersectionObserver(function (es) { swVis = es[0].isIntersecting; swGo() }).observe(scene); else { swVis = true; swGo() }
+  document.addEventListener("visibilitychange", swGo);
   var drag = null;
   scene.addEventListener("pointerdown", function(e){ if (e.target.closest(".lv-ctrl")) return; idle = false; drag = { x: e.clientX, y: e.clientY, rx: rx, rz: rz }; scene.classList.add("drag"); scene.setPointerCapture(e.pointerId) });
   scene.addEventListener("pointermove", function(e){ if (!drag) return; rz = drag.rz + (e.clientX - drag.x) * 0.3; rx = Math.max(0, Math.min(78, drag.rx - (e.clientY - drag.y) * 0.25)); apply() });
@@ -739,38 +788,13 @@ try{
   var lys = [].slice.call(document.querySelectorAll(".show [data-depth]"));
   function par(){ lys.forEach(function(l){ var sec = l.closest(".show"); if (!sec.classList.contains("in")) return; var r = sec.getBoundingClientRect(); if (r.bottom < 0 || r.top > innerHeight) return;
     var t = (r.top + r.height / 2 - innerHeight / 2) / innerHeight, d = parseFloat(l.getAttribute("data-depth")); l.style.translate = "0 " + (t * d * -400) + "px" }) }
-  window.addEventListener("scroll", function(){ requestAnimationFrame(par) }, { passive: true }); par();
+  window.__frame.add(par); par();
 })();
-/* even, smooth wheel scrolling across the whole site (touch and keyboard untouched) */
-
-}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 14: "+(e&&e.message||e))}
-try{
-(function(){
-  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  var target = window.scrollY, cur = window.scrollY, raf = null;
-  function max(){ return document.documentElement.scrollHeight - innerHeight }
-  var lastT = 0; function step(now){ var dt = lastT ? Math.min(64, now - lastT) : 16.7; lastT = now; cur += (target - cur) * (1 - Math.pow(1 - 0.24, dt / 16.7)); if (Math.abs(target - cur) < 0.5) cur = target; window.scrollTo(0, cur); raf = cur !== target ? requestAnimationFrame(step) : (lastT = 0, null) }
-  window.addEventListener("wheel", function(e){
-    if (e.ctrlKey || e.defaultPrevented) return;
-    var el = e.target; if (el.closest && el.closest(".pd-card,.mp,.iv,.lb,textarea,select")) return;
-    if (document.documentElement.style.overflow === "hidden") return;
-    if (document.documentElement.scrollHeight <= innerHeight + 2) return;   // page is not the scroller (embedded viewer): leave native scrolling alone
-    // sideways gestures (trackpad swipe, shift + wheel) and trackpads in general stay native, like Apple's pages: only notched mouse wheels are smoothed
-    if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
-    if (e.deltaMode === 0 && Math.abs(e.deltaY) < 40) return;
-    e.preventDefault();
-    var d = e.deltaY * (e.deltaMode === 1 ? 32 : e.deltaMode === 2 ? innerHeight : 1);
-    d = Math.max(-280, Math.min(280, d));
-    if (!raf) { cur = window.scrollY; target = cur }
-    target = Math.max(0, Math.min(max(), target + d));
-    if (!raf) raf = requestAnimationFrame(step);
-  }, { passive: false });
-  window.addEventListener("scroll", function(){ if (!raf) { cur = target = window.scrollY } }, { passive: true });
-})();
+/* wheel smoothing removed: native scrolling is smoother and never fights the browser */
 
 /* Majesty board: top view tilts into 3D perspective while scrolling */
 
-}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 15: "+(e&&e.message||e))}
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 14: "+(e&&e.message||e))}
 try{
 (function () {
   var t = document.querySelector(".cf-tilt"); if (!t) return;
@@ -786,13 +810,13 @@ try{
     t.style.setProperty("--gp", p.toFixed(3));
     sh.style.setProperty("--sp", e.toFixed(3));
   }
-  addEventListener("scroll", function () { if (!ticking) { ticking = true; requestAnimationFrame(up); } }, { passive: true });
+  window.__frame.add(up);
   up();
 })();
 
 /* Statement character: slides in from the right and lights up as the section comes into view, both directions, with inertia so it glides */
 
-}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 16: "+(e&&e.message||e))}
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 15: "+(e&&e.message||e))}
 try{
 (function () {
   var w = document.querySelector(".statement .char-wrap"); if (!w) return;
@@ -813,19 +837,19 @@ try{
     img.style.filter = e > 0.995 ? "none" : "brightness(" + (0.2 + 0.8 * e).toFixed(3) + ")";
     w.style.setProperty("--glow", e.toFixed(3));
   }
-  function loop() {
-    raf = null; var t = target();
-    cur += (t - cur) * 0.12; if (Math.abs(t - cur) < 0.001) cur = t; else raf = requestAnimationFrame(loop);
+  var lt = 0;
+  function loop(now) {
+    raf = null; var t = target(), dt = lt && now ? Math.min(64, now - lt) : 16.7; lt = now || 0;
+    cur += (t - cur) * (1 - Math.pow(1 - 0.12, dt / 16.7)); if (Math.abs(t - cur) < 0.001) { cur = t; lt = 0; } else raf = requestAnimationFrame(loop);
     paint(cur);
   }
-  addEventListener("scroll", function () { if (!raf) raf = requestAnimationFrame(loop); }, { passive: true });
-  addEventListener("resize", function () { if (!raf) raf = requestAnimationFrame(loop); });
+  window.__frame.add(function () { if (!raf) loop(performance.now()); });
   cur = target(); paint(cur);
 })();
 
 /* BoJack: reveal blocks, draw the gold thread through the process */
 
-}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 17: "+(e&&e.message||e))}
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 16: "+(e&&e.message||e))}
 try{
 (function () {
   var bj = document.querySelector(".bj"); if (!bj) return;
@@ -840,12 +864,12 @@ try{
   var tick = false;
   function up() { tick = false; if (!th) return; var r = proc.getBoundingClientRect(), vh = innerHeight;
     var p = Math.min(1, Math.max(0, (vh - r.top) / (vh * 0.9))); th.style.setProperty("--th", (1 - p).toFixed(3)); }
-  addEventListener("scroll", function () { if (!tick) { tick = true; requestAnimationFrame(up); } }, { passive: true }); up();
+  window.__frame.add(up); up();
 })();
 
 /* Brand pages: scroll-synced. Regions light up one after another as the page scrolls in, and reverse on the way back */
 
-}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 18: "+(e&&e.message||e))}
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 17: "+(e&&e.message||e))}
 try{
 (function () {
   var pgs = [].slice.call(document.querySelectorAll(".pg")).map(function (pg) {
@@ -862,31 +886,30 @@ try{
       r.style.transform = "translate3d(0," + ((1 - k) * 26).toFixed(1) + "px,0) scale(" + (1 + (1 - k) * 0.03).toFixed(4) + ")";
     });
     var b = Math.max(0, Math.min(1, (p - 0.75) / 0.25));
-    o.base.style.filter = b >= 1 ? "none" : "brightness(" + (0.72 + 0.28 * b).toFixed(3) + ") blur(" + (3 * (1 - b)).toFixed(2) + "px)";
+    o.base.style.filter = b >= 1 ? "none" : "brightness(" + (0.72 + 0.28 * b).toFixed(3) + ")";
     o.base.style.opacity = 1;
     o.el.classList.toggle("done", p >= 0.999);
     if (innerWidth > 900) o.st.style.setProperty("--z", (1.05 - 0.05 * p).toFixed(4));
   }
   if (still) { pgs.forEach(function (o) { paint(o, 1); }); return; }
-  var raf = null;
-  function loop() {
-    raf = null; var vh = innerHeight, moving = false;
+  var raf = null, lt = 0;
+  function loop(now) {
+    raf = null; var vh = innerHeight, moving = false, dt = lt && now ? Math.min(64, now - lt) : 16.7, a = 1 - Math.pow(1 - 0.18, dt / 16.7); lt = now || 0;
     pgs.forEach(function (o) {
       var r = o.st.getBoundingClientRect(); if (r.bottom < -100 || r.top > vh + 100) return;
       var target = Math.max(0, Math.min(1, (vh * 0.95 - r.top) / (vh * 0.75)));
-      o.cur += (target - o.cur) * 0.18; if (Math.abs(target - o.cur) < 0.002) o.cur = target; else moving = true;
+      o.cur += (target - o.cur) * a; if (Math.abs(target - o.cur) < 0.002) o.cur = target; else moving = true;
       paint(o, o.cur);
     });
-    if (moving) raf = requestAnimationFrame(loop);
+    if (moving) raf = requestAnimationFrame(loop); else lt = 0;
   }
-  addEventListener("scroll", function () { if (!raf) raf = requestAnimationFrame(loop); }, { passive: true });
-  addEventListener("resize", function () { if (!raf) raf = requestAnimationFrame(loop); });
+  window.__frame.add(function () { if (!raf) loop(performance.now()); });
   loop();
 })();
 
 /* detective VR frame settles in when seen */
 
-}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 19: "+(e&&e.message||e))}
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 18: "+(e&&e.message||e))}
 try{
 (function () { var d = document.querySelector(".dvr"); if (!d) return;
   if (!("IntersectionObserver" in window)) { d.classList.add("in"); return; }
@@ -894,7 +917,7 @@ try{
 
 /* keyframe boards: frames settle in, gold timeline draws with scroll */
 
-}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 20: "+(e&&e.message||e))}
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 19: "+(e&&e.message||e))}
 try{
 (function () {
   var secs = [].slice.call(document.querySelectorAll(".kf-sec")); if (!secs.length) return;
@@ -906,12 +929,12 @@ try{
   function up() { tick = false; var vh = innerHeight;
     secs.forEach(function (s) { var r = s.getBoundingClientRect(); if (r.bottom < 0 || r.top > vh) return;
       var p = Math.min(1, Math.max(0, (vh * 0.9 - r.top) / (r.height * 0.9))); s.querySelector(".kf-line").style.setProperty("--kp", p.toFixed(3)); }); }
-  addEventListener("scroll", function () { if (!tick) { tick = true; requestAnimationFrame(up); } }, { passive: true }); up();
+  window.__frame.add(up); up();
 })();
 
 /* systems opener: orthogonal connectors entering from every edge, ending in nodes, pulses running along them */
 
-}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 21: "+(e&&e.message||e))}
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 20: "+(e&&e.message||e))}
 try{
 (function () {
   var svg = document.querySelector(".sys-net svg"); if (!svg) return;
@@ -922,7 +945,10 @@ try{
     [[0,820],["h",120],["v",760],["h",210]], [[1600,90],["h",1380],["v",200],["h",1190]], [[1600,330],["h",1450],["v",260],["h",1300]],
     [[1600,600],["h",1320],["v",690],["h",1150]], [[1600,850],["h",1480],["v",780],["h",1380]], [[360,0],["v",90],["h",560],["v",150]],
     [[1200,0],["v",60],["h",1010],["v",140]], [[520,900],["v",820],["h",690],["v",760]], [[1080,900],["v",840],["h",930],["v",770]],
-    [[800,0],["v",40]], [[760,900],["v",860]]
+    [[800,0],["v",40]], [[760,900],["v",860]],
+    // four lines that reach in and end right around the word
+    [[0,470],["h",380],["v",400],["h",540]], [[1600,430],["h",1240],["v",360],["h",1075]],
+    [[640,0],["v",130],["h",740],["v",190]], [[980,900],["v",720],["h",1180],["v",640]]
   ];
   lines.forEach(function (L, i) {
     var x = L[0][0], y = L[0][1], d = "M" + x + "," + y, pts = [[x, y]];
@@ -946,7 +972,7 @@ try{
 /* Section blends: wherever two neighbouring sections have different background colours,
    the top of the lower one fades in from the colour above, so the page reads as one continuous surface */
 
-}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 22: "+(e&&e.message||e))}
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 21: "+(e&&e.message||e))}
 try{
 (function () {
   var main = document.querySelector("main"); if (!main) return;
@@ -982,4 +1008,4 @@ try{
   if (document.readyState === "complete") build(); else addEventListener("load", build);
 })();
 
-}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 23: "+(e&&e.message||e))}
+}catch(e){(window.__siteErrs=window.__siteErrs||[]).push("main block 22: "+(e&&e.message||e))}
