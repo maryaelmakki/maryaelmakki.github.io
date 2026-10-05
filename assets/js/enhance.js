@@ -910,7 +910,7 @@ try{
 }catch(e){(window.__siteErrs=window.__siteErrs||[]).push("enhance block 6: "+(e&&e.message||e))}
 try{
 (function () {
-  var f = document.querySelector(".gxs-f"); if (!f) return;
+  var f = document.querySelector(".gxw-f"); if (!f) return;
   if (!("IntersectionObserver" in window)) { f.classList.add("on"); return; }
   var io = new IntersectionObserver(function (es) { es.forEach(function (x) { if (x.isIntersecting) { f.classList.add("on"); io.disconnect(); } }); }, { rootMargin: "0px 0px -12% 0px" });
   io.observe(f);

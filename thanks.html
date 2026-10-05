@@ -46,7 +46,7 @@ p.msg{margin:28px 0 0;font-size:clamp(17px,1.6vw,22px);font-weight:300;color:var
 <p class="cap" aria-hidden="true">Featured<b id="capT"></b></p>
 <script>
 (function(){
-  var names = {canva:"Canva AI Masterclass",capcut:"CapCut Masterclass",ai:"Think With AI",procreate:"Procreate private lessons",linearity:"Linearity Curve private lessons",metahuman:"Custom MetaHuman"};
+  var names = {canva:"Canva AI",capcut:"CapCut",ai:"Think With AI",procreate:"Procreate",linearity:"Linearity Curve + Move",metahuman:"Custom MetaHuman"};
   var c = new URLSearchParams(location.search).get("course");
   if (names[c]) document.getElementById("kicker").textContent = "Request received · " + names[c];
   var caps = [[0,"From Toba With Love · AI film"],[3,"A model · AI motion"],[6,"Dark · Illustration"],[9,"From Toba With Love · AI film"],[12,"Face loop · Motion"],[15,"A model · AI motion"],[17.5,"Dark · Illustration"],[20.5,"Illustration in motion"],[24,"From Toba With Love · AI film"]];
