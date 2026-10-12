@@ -1,6 +1,7 @@
 /* =========================================================================
    motion.js — the only motion system on the site (GSAP + ScrollTrigger).
-   Native scrolling; one ticker; every scroll-linked effect is a ScrollTrigger.
+   Lenis smooths wheel scrolling on desktop and runs on GSAP's ticker, so there is
+   still one clock; every scroll-linked effect is a ScrollTrigger.
 
    Level 1  global: atmosphere tint, sector transitions, chapter titles
    Level 2  storytelling: one timeline per signature project
@@ -27,13 +28,30 @@
   var mm = gsap.matchMedia();
   window.siteMotion = { mm: mm };
 
+  /* ---------------------------------------------------------------- smooth scroll
+     Mouse wheels and trackpads get momentum; touch keeps the phone's own scrolling.
+     Off for reduced motion. Locks (menu, viewer, panels) pause it. */
+  var lenis = null;
+  if (window.Lenis && !reduce) {
+    lenis = new Lenis({ lerp: .1, wheelMultiplier: 1, anchors: false, prevent: function (el) { return el.closest && el.closest(".tape-wrap, .svc-box, .viewer, .index-menu, .mh, .eco-strip, dialog"); } });
+    lenis.on("scroll", ScrollTrigger.update);
+    gsap.ticker.add(function (t) { lenis.raf(t * 1000); });
+    gsap.ticker.lagSmoothing(0);
+    new MutationObserver(function () {
+      var locked = root.classList.contains("is-locked") || root.classList.contains("menu-open");
+      locked ? lenis.stop() : lenis.start();
+    }).observe(root, { attributes: true, attributeFilter: ["class"] });
+  }
+  window.siteMotion.lenis = lenis;
+  var ANT = lenis ? 0 : 1;   // with Lenis driving the scroll, pre-pinning only causes a visible hop
+
   /* ---------------------------------------------------------------- media
      Only the hero film loads at once. Every other video gets its source a
      screen before it arrives and plays only while it is on screen. */
   function arm(v) { if (!v.getAttribute("src") && v.dataset.src) { v.src = v.dataset.src; v.load(); } }
   function play(v) { arm(v); var p = v.play(); if (p && p.catch) p.catch(function () {}); }
   $$("video[data-src]").forEach(function (v) {
-    var box = v.closest(".chapter, .film-cut, .proc-fig, .loop, .reel-hero, .reel-f") || v;
+    var box = v.closest(".chapter, .film-cut, .proc-fig, .loop, .reel-hero, .reel-f, .eco-browser") || v;
     ScrollTrigger.create({ trigger: box, start: "top bottom+=100%", end: "bottom top-=100%", onToggle: function (st) { if (st.isActive) arm(v); } });
     ScrollTrigger.create({ trigger: box, start: "top bottom", end: "bottom top", onToggle: function (st) { st.isActive ? play(v) : v.pause(); } });
   });
@@ -116,20 +134,44 @@
   }
   $$(".chapter").forEach(function (ch) { wrapTitle($(".chapter-title", ch)); });
 
+  /* Entering a sector reads like a camera aperture: two black shutters part from the
+     middle, the line drawing comes up behind them, then the title rises letter by letter
+     and the rule draws across. All of it follows the scroll, so it reverses on the way up.
+     The shutters only move with transforms, so the browser never repaints the scene. */
+  function splitChars(el) {
+    var inner = el && el.querySelector(".line > span");
+    if (!inner || inner.dataset.split) return [];
+    inner.dataset.split = "1";
+    el.setAttribute("aria-label", inner.textContent.trim());
+    var words = inner.textContent.trim().split(/\s+/);
+    inner.innerHTML = words.map(function (w) {
+      return '<span class="ch-w" aria-hidden="true">' + w.split("").map(function (c) { return '<span class="ch-c">' + c + "</span>"; }).join("") + "</span>";
+    }).join(" ");
+    return $$(".ch-c", inner);
+  }
+  $$(".chapter").forEach(function (ch) { ch._chars = splitChars($(".chapter-title", ch)); });
+
   mm.add("(prefers-reduced-motion: no-preference)", function () {
+    var made = [];
     $$(".chapter").forEach(function (ch) {
       var sector = ch.closest(".sector"), prev = sector && sector.previousElementSibling;
       var tail = prev ? (prev.classList.contains("sector") ? prev.lastElementChild : prev.firstElementChild) : null;
       var box = $(".chapter-media", ch), media = box && (box.querySelector(".chapter-art") ? box : box.firstElementChild);
-      var tl = gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ch, start: "top bottom", end: "center center", scrub: .5 } });
-      if (tail) tl.to(tail, { opacity: .18, y: -30, duration: .7 }, 0);
-      if (media) tl.fromTo(media, { opacity: 0, scale: 1.1 }, { opacity: media.tagName === "VIDEO" ? .42 : 1, scale: 1.02, duration: 1 }, 0);
-      tl.fromTo($(".chapter-num", ch), { opacity: 0 }, { opacity: 1, duration: .25 }, .55)
-        .fromTo($(".chapter-title .line > span", ch), { yPercent: 108 }, { yPercent: 0, duration: .4, ease: "power2.out" }, .5)
-        .fromTo($(".chapter-sub", ch), { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .3 }, .7)
-        .fromTo($(".chapter-rule", ch), { scaleX: 0 }, { scaleX: 1, duration: .45 }, .62);
+      var shut = document.createElement("div"); shut.className = "ch-shut"; shut.setAttribute("aria-hidden", "true"); shut.innerHTML = "<i></i><i></i>";
+      ch.appendChild(shut); made.push(shut);
+      var halves = $$("i", shut), chars = ch._chars || [];
+      var tl = gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ch, start: "top bottom", end: "center center", scrub: .7 } });
+      if (tail && !prev.classList.contains("statement")) tl.to(tail, { opacity: .18, y: -30, duration: .7 }, 0);
+      tl.fromTo(halves[0], { yPercent: 0 }, { yPercent: -101, duration: .55, ease: "power2.inOut" }, .12)
+        .fromTo(halves[1], { yPercent: 0 }, { yPercent: 101, duration: .55, ease: "power2.inOut" }, .12);
+      if (media) tl.fromTo(media, { opacity: 0, scale: 1.12 }, { opacity: media.tagName === "VIDEO" ? .42 : 1, scale: 1.02, duration: .8 }, .15);
+      tl.fromTo($(".chapter-num", ch), { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: .2 }, .48);
+      if (chars.length) tl.fromTo(chars, { yPercent: 115, rotate: 8, opacity: 0 }, { yPercent: 0, rotate: 0, opacity: 1, duration: .32, ease: "power3.out", stagger: { amount: .2 } }, .5);
+      tl.fromTo($(".chapter-sub", ch), { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .25 }, .76)
+        .fromTo($(".chapter-rule", ch), { scaleX: 0 }, { scaleX: 1, duration: .35 }, .7);
       if (media) gsap.to(media, { scale: 1, ease: "none", scrollTrigger: { trigger: ch, start: "center center", end: "bottom top", scrub: true } });
     });
+    return function () { made.forEach(function (s) { s.remove(); }); };
   });
 
   /* ---------------------------------------------------------------- reveals
@@ -165,15 +207,33 @@
       gsap.fromTo(pt.children, { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: .9, stagger: .1, delay: i * .12, scrollTrigger: { trigger: ".gor-pts", start: "top 82%", once: true } });
     });
     // supporting pictures: a single soft arrival, no movement
-    $$(".bj-step, .loop, .reel-hero, .reel-f, .rem-flat, .tape:not(.tape-collage), .proc-fig").forEach(function (el) {
+    $$(".bj-step, .loop, .reel-hero, .reel-f, .rem-flat, .tape:not(.tape-collage):not(.tape-bento), .proc-fig").forEach(function (el) {
       gsap.fromTo(el, { opacity: 0 }, { opacity: 1, duration: 1.2, ease: "power2.out", scrollTrigger: { trigger: el, start: "top 90%", once: true } });
     });
   });
 
-  /* ---------------------------------------------------------------- statement */
+  /* ---------------------------------------------------------------- statement
+     One continuous, scroll-tied pass: the masked character drifts in from the right out
+     of black smoke, is fully clear while the section sits in the middle of the screen,
+     then sinks back into the smoke as you leave. Same path in reverse when scrolling up. */
   mm.add("(prefers-reduced-motion: no-preference)", function () {
-    gsap.fromTo(".statement-char img", { xPercent: 14, opacity: 0 }, { xPercent: 0, opacity: 1, ease: "none",
-      scrollTrigger: { trigger: ".statement", start: "top 80%", end: "center 55%", scrub: true } });
+    var fig = $(".statement-char"); if (!fig) return;
+    var img = $("img", fig), smoke = $$(".st-smoke", fig), wide = innerWidth > 900;
+    gsap.fromTo($$(".statement-copy > *"), { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: .9, stagger: .08, ease: "power3.out",
+      scrollTrigger: { trigger: ".statement", start: "top 70%", toggleActions: "play none none reverse" } });
+    gsap.set(img, { force3D: true });
+    gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: fig, start: "top bottom", end: "bottom top", scrub: 1.1 } })
+      // in: from the right, out of the smoke
+      .fromTo(img, { x: wide ? 140 : 50, opacity: .08, scale: 1.04 }, { x: 0, opacity: 1, scale: 1, duration: .42, ease: "power2.out" }, 0)
+      .fromTo(smoke[0], { opacity: .95, xPercent: 0, scale: 1.05 }, { opacity: 0, xPercent: -18, scale: 1.2, duration: .36, ease: "power1.in" }, 0)
+      .fromTo(smoke[1], { opacity: .8, xPercent: 6, scale: 1.1 }, { opacity: 0, xPercent: -10, scale: 1.3, duration: .32, ease: "power1.in" }, .04)
+      // hold, clear, in the middle of the screen
+      .to({}, { duration: .16 }, .42)
+      // out: she softens and the smoke closes over her, drifting left
+      .to(img, { x: wide ? -50 : -20, opacity: 0, scale: .97, duration: .42, ease: "power1.in" }, .58)
+      .fromTo(smoke[0], { opacity: 0, xPercent: 22, scale: 1.3 }, { opacity: 1, xPercent: 0, scale: 1, duration: .4, ease: "power1.out", immediateRender: false }, .56)
+      .fromTo(smoke[1], { opacity: 0, xPercent: 30, scale: 1.45 }, { opacity: .95, xPercent: -4, scale: 1.05, duration: .4, ease: "power1.out", immediateRender: false }, .62);
+    return function () { gsap.set([img].concat(smoke), { clearProps: "all" }); };
   });
 
 
@@ -185,15 +245,17 @@
        with depth, the logo lands, then the supporting words. Reverses on the way up. */
     (function () {
       var g = $(".gor"); if (!g) return;
-      var tl = gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ".gor-pin", start: "top top", end: "+=90%", pin: true, scrub: .6, anticipatePin: 1 } });
-      // the logo is part of the opening frame, as on the campaign board; it only settles
-      tl.fromTo(".gor-bg img", { scale: 1.2, opacity: .35 }, { scale: 1, opacity: 1, duration: 1 }, 0)
-        .fromTo(".gor-logo", { scale: 1.08 }, { scale: 1, duration: .8, ease: "power2.out" }, 0)
-        .fromTo(".gor-girl", { xPercent: 10, scale: .94 }, { xPercent: 0, scale: 1, duration: .8, ease: "power2.out" }, .15)
-        .fromTo(".gor-girl", { opacity: 0 }, { opacity: 1, duration: .28 }, .17)
-        .fromTo(".gor-girl img", { yPercent: 4 }, { yPercent: 0, duration: 1.1 }, .15)
-        .fromTo([".gor-kicker", ".gor-sub", ".gor-ticks"], { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .3, stagger: .08 }, .75)
-        .to({}, { duration: .25 });
+      // on the way in: the board rises out of the dark and the logo lands before the pin
+      gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ".gor-pin", start: "top bottom", end: "top top", scrub: 1 } })
+        .fromTo(".gor-bg img", { scale: 1.28, opacity: 0 }, { scale: 1.16, opacity: .45, duration: 1 }, 0)
+        .fromTo(".gor-logo", { opacity: 0, y: 40, scale: 1.12 }, { opacity: 1, y: 0, scale: 1.06, duration: .8, ease: "power2.out" }, .2);
+      var tl = gsap.timeline({ defaults: { ease: "power1.inOut" }, scrollTrigger: { trigger: ".gor-pin", start: "top top", end: "+=130%", pin: true, scrub: 1, anticipatePin: ANT } });
+      tl.fromTo(".gor-bg img", { scale: 1.16, opacity: .45 }, { scale: 1, opacity: 1, duration: 1, immediateRender: false }, 0)
+        .fromTo(".gor-logo", { scale: 1.06 }, { scale: 1, duration: .7, immediateRender: false }, 0)
+        .fromTo(".gor-girl", { xPercent: 12, scale: .95, opacity: 0 }, { xPercent: 0, scale: 1, opacity: 1, duration: .75, ease: "power2.out" }, .12)
+        .fromTo(".gor-girl img", { yPercent: 4 }, { yPercent: 0, duration: 1, ease: "none" }, .12)
+        .fromTo([".gor-kicker", ".gor-sub", ".gor-ticks"], { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .35, stagger: .1, ease: "power2.out" }, .62)
+        .to({}, { duration: .3 });
     })();
 
     /* Gorilla, splash to spotlight: the burst through the ice slowly pushes in, the
@@ -201,7 +263,7 @@
     (function () {
       var x = $(".gx"); if (!x) return;
       x.classList.add("is-pinned");
-      var tl = gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ".gx-pin", start: "top top", end: "+=110%", pin: true, scrub: .6, anticipatePin: 1 } });
+      var tl = gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ".gx-pin", start: "top top", end: "+=110%", pin: true, scrub: .6, anticipatePin: ANT } });
       tl.fromTo(".gx-a > img", { scale: 1.02 }, { scale: 1.12, duration: .6 }, 0)
         .fromTo(".gx-copy", { opacity: 1, y: 0 }, { opacity: 0, y: -30, duration: .2, ease: "power1.in" }, .22)
         .fromTo(".gx-dim", { opacity: 0 }, { opacity: .92, duration: .22, ease: "power1.inOut" }, .36)
@@ -234,7 +296,7 @@
         gimg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;pointer-events:none";
         $(".inw-frames", w).appendChild(gimg); return gimg;
       });
-      var tl = gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ".inw-pin", start: "top top", end: "+=130%", pin: true, scrub: .6, anticipatePin: 1, onRefresh: function () { paths = wires(); } } });
+      var tl = gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ".inw-pin", start: "top top", end: "+=130%", pin: true, scrub: .6, anticipatePin: ANT, onRefresh: function () { paths = wires(); } } });
       gsap.fromTo(refs, { opacity: 0, x: -24 }, { opacity: 1, x: 0, stagger: .15, ease: "power2.out", scrollTrigger: { trigger: ".inw-pin", start: "top 85%", end: "top 15%", scrub: .5 } });
       tl.fromTo(out, { opacity: .15 }, { opacity: 1, duration: .3 }, .1)
         .fromTo(paths, { strokeDasharray: 1, strokeDashoffset: 1 }, { strokeDashoffset: 0, stagger: .08, duration: .35 }, .3)
@@ -255,7 +317,7 @@
       var s = $(".sla"); if (!s) return;
       s.classList.add("is-pinned");
       var steps = $$(".sla-steps li", s);
-      var tl = gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ".sla-pin", start: "top top", end: "+=160%", pin: true, scrub: .6, anticipatePin: 1,
+      var tl = gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ".sla-pin", start: "top top", end: "+=280%", pin: true, scrub: 1, anticipatePin: ANT,
         onUpdate: function (st) { var k = st.progress < .36 ? 0 : st.progress < .7 ? 1 : 2; steps.forEach(function (li, i) { li.classList.toggle("on", i === k); }); } } });
       // beat one is already in place when the scene pins: it arrives on the approach
       gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ".sla-pin", start: "top 85%", end: "top 10%", scrub: true } })
@@ -268,9 +330,8 @@
         .fromTo(".sla-p", { opacity: 0, y: 70 }, { opacity: 1, y: 0, stagger: .05, duration: .16, ease: "power2.out" }, .4)
         .to(".sla-b2", { opacity: 0, y: -40, duration: .12 }, .66)
         .fromTo(".sla-b3", { opacity: 0 }, { opacity: 1, duration: .06 }, .7)
-        .fromTo(".sla-cafe", { clipPath: "inset(18% 12% 18% 12%)", scale: 1.1 }, { clipPath: "inset(0% 0% 0% 0%)", scale: 1, duration: .2, ease: "power2.out" }, .7)
         .fromTo(".sla-snow", { opacity: 1 }, { opacity: 0, duration: .1 }, .72)
-        .fromTo(".sla-result > *", { opacity: 0, y: 14 }, { opacity: 1, y: 0, stagger: .04, duration: .12 }, .82)
+        .fromTo(".sla-result > *, .sla-result .facts > div", { opacity: 0, y: 18 }, { opacity: 1, y: 0, stagger: .04, duration: .12 }, .76)
         .to({}, { duration: .06 });
       cleanups.push(function () { s.classList.remove("is-pinned"); });
     })();
@@ -285,11 +346,12 @@
       function rest(i) { return (2 * gap - i * gap) + "px"; }
       // the current layer's step opens; at the end every step reads as done
       function light(k) { if (k === last) return; last = k; w.classList.toggle("is-done", k === 5); txts.forEach(function (t, i) { t.classList.toggle("on", i === k); }); }
-      var tl = gsap.timeline({ defaults: { ease: "power2.out" }, scrollTrigger: { trigger: ".ws-pin", start: "top top", end: "+=170%", pin: true, scrub: .6, anticipatePin: 1,
+      var tl = gsap.timeline({ defaults: { ease: "power2.out" }, scrollTrigger: { trigger: ".ws-pin", start: "top top", end: "+=170%", pin: true, scrub: .6, anticipatePin: ANT,
         onUpdate: function (st) { var p = st.progress; light(p > .9 ? 5 : Math.min(4, Math.floor(p / .155))); } } });
       gsap.set(cards, { "--rx": "56deg", "--rz": "-38deg" });
       tl.set([".ws-live", ".ws-lock"], { opacity: 0 }, 0).set(".ws-end", { opacity: 0, y: 10 }, 0);
-      gsap.fromTo(cards[0], { opacity: 0, "--ty": (2 * gap - 240) + "px" }, { opacity: 1, "--ty": rest(0), ease: "power2.out", scrollTrigger: { trigger: ".ws-pin", start: "top 75%", end: "top 10%", scrub: .5 } });
+      gsap.fromTo(cards[0], { opacity: 0, "--ty": (2 * gap - 240) + "px" }, { opacity: 1, "--ty": rest(0), ease: "power2.out", scrollTrigger: { trigger: ".ws-pin", start: "top 95%", end: "top 15%", scrub: .5 } });
+      gsap.fromTo(txts, { opacity: 0, x: 24 }, { opacity: .38, x: 0, stagger: .06, ease: "power2.out", scrollTrigger: { trigger: ".ws-pin", start: "top 70%", end: "top 5%", scrub: .5 }, clearProps: "opacity" });
       cards.forEach(function (c, i) {
         if (i) tl.fromTo(c, { opacity: 0, "--ty": (2 * gap - i * gap - 240) + "px" }, { opacity: 1, "--ty": rest(i), duration: .1 }, i * .155);
       });
@@ -330,7 +392,7 @@
         P.step = thumbs.length > 1 ? thumbs[1].getBoundingClientRect().left - thumbs[0].getBoundingClientRect().left : 0;
       }
       spots();
-      var tl = gsap.timeline({ defaults: { ease: "power2.out" }, scrollTrigger: { trigger: ".px-pin", start: "top top", end: "+=160%", pin: true, scrub: .6, anticipatePin: 1,
+      var tl = gsap.timeline({ defaults: { ease: "power2.out" }, scrollTrigger: { trigger: ".px-pin", start: "top top", end: "+=160%", pin: true, scrub: .6, anticipatePin: ANT,
         onRefresh: spots } });
       // the clock runs the whole way: days become minutes
       // before the pin: the empty workspace arrives, so the scene never opens on a blank screen
@@ -391,7 +453,7 @@
     (function () {
       var p = $(".pipe"); if (!p) return;
       var nodes = $$(".pn", p), lines = $$(".pl", p);
-      var tl = gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ".pipe-pin", start: "top top", end: "+=120%", pin: true, scrub: .6, anticipatePin: 1 } });
+      var tl = gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ".pipe-pin", start: "top top", end: "+=120%", pin: true, scrub: .6, anticipatePin: ANT } });
       gsap.timeline({ defaults: { ease: "none" }, scrollTrigger: { trigger: ".pipe-pin", start: "top 85%", end: "top 15%", scrub: .5 } })
         .fromTo(".pipe-bg", { opacity: 0 }, { opacity: .55, duration: .5 }, 0)
         .fromTo(nodes.slice(0, 2), { opacity: 0, scale: .94 }, { opacity: 1, scale: 1, stagger: .2, duration: .5 }, .3);
@@ -426,12 +488,27 @@
 
     /* illustration: pictures are revealed like ink going down, left to right; titles get a drawn rule */
     $$(".art").forEach(function (a) {
-      var tl = gsap.timeline({ scrollTrigger: { trigger: a, start: "top 78%", once: true } });
-      tl.fromTo($(".art-fig", a), { clipPath: "inset(0% 100% 0% 0%)" }, { clipPath: "inset(0% 0% 0% 0%)", duration: 1.6, ease: "power2.inOut" })
-        .fromTo($(".art-fig img", a), { scale: 1.06 }, { scale: 1, duration: 2.2, ease: "power2.out" }, 0)
-        .fromTo($(".art-txt", a).children, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: .8, stagger: .08 }, .6);
+      // the picture stays still; its words arrive beside it (below it on phones)
+      var side = a.querySelector(".art-fig") && getComputedStyle(a.querySelector(".art-fig")).order === "2" ? -24 : 24;
+      gsap.fromTo($(".art-txt", a).children, { opacity: 0, x: innerWidth > 900 ? side : 0, y: innerWidth > 900 ? 0 : 14 }, { opacity: 1, x: 0, y: 0, duration: .9, stagger: .07, ease: "power3.out",
+        scrollTrigger: { trigger: a, start: "top 70%", toggleActions: "play none none reverse" } });
     });
     gsap.fromTo(".disc", { rotate: -40 }, { rotate: 40, ease: "none", scrollTrigger: { trigger: ".btw", start: "top bottom", end: "bottom top", scrub: true } });
+
+    /* EcoFurChild: the browser rises; the two lifted screens drift at their own speeds */
+    gsap.fromTo(".eco-browser", { opacity: 0, y: 60, scale: .96 }, { opacity: 1, y: 0, scale: 1, duration: 1.2, ease: "power3.out", scrollTrigger: { trigger: ".eco-stage", start: "top 80%", once: true } });
+    if (innerWidth > 900) {
+      gsap.fromTo(".eco-f1", { yPercent: 40, rotate: -4 }, { yPercent: -30, rotate: -1, ease: "none", scrollTrigger: { trigger: ".eco-stage", start: "top bottom", end: "bottom top", scrub: .6 } });
+      gsap.fromTo(".eco-f2", { yPercent: -10, rotate: 3 }, { yPercent: -70, rotate: 1, ease: "none", scrollTrigger: { trigger: ".eco-stage", start: "top bottom", end: "bottom top", scrub: .6 } });
+    }
+    $$(".eco-strip figure").forEach(function (f, i) {
+      gsap.fromTo(f, { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: .9, delay: i * .08, ease: "power3.out", scrollTrigger: { trigger: ".eco-strip", start: "top 88%", once: true } });
+    });
+
+    /* Gorilla board: frames rise in, a little apart */
+    $$(".gbento .tape-f").forEach(function (f, i) {
+      gsap.fromTo(f, { opacity: 0, y: 36, scale: .98 }, { opacity: 1, y: 0, scale: 1, duration: 1, delay: (i % 3) * .07, ease: "power3.out", scrollTrigger: { trigger: f, start: "top 92%", once: true } });
+    });
 
     /* instinct collage: the three columns drift at different speeds, the middle one against the others */
     $$(".clg").forEach(function (c) {

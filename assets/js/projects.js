@@ -64,12 +64,15 @@
       .set(curtain, { visibility: "visible", yPercent: 100 })
       .to(curtain, { yPercent: 0, duration: .55, ease: "power3.inOut" })
       .fromTo(".curtain-t", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: .45, ease: ease }, .2)
-      .add(function () { scrollTo(0, y); if (ST) ST.update(); }, .62)
+      .add(function () { var L = lenisOf(); L ? L.scrollTo(y, { immediate: true, force: true }) : scrollTo(0, y); if (ST) ST.update(); }, .62)
       .to(".curtain-t", { opacity: 0, y: -16, duration: .3 }, .9)
       .to(curtain, { yPercent: -100, duration: .7, ease: "power3.inOut" }, .95)
       .set(curtain, { visibility: "hidden" });
   }
+  function lenisOf() { return window.siteMotion && window.siteMotion.lenis; }
   function smoothScroll(y, dur) {                       // used only for short hops; native smooth scroll is not reliable everywhere
+    var L = lenisOf();
+    if (L) { L.scrollTo(y, { duration: dur / 1000, easing: function (t) { return t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; } }); return; }
     var y0 = scrollY, d = y - y0, o = { k: 0 };
     G.to(o, { k: 1, duration: dur / 1000, ease: "power3.inOut", onUpdate: function () { scrollTo(0, y0 + d * o.k); } });
   }

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Learn with Marya · Marya El Makki</title>
-<meta name="description" content="Lessons and masterclasses with Marya El Makki, for groups or one to one: Canva AI, CapCut, Procreate, Linearity Curve + Move.">
+<meta name="description" content="Classes with Marya El Makki, one to one or in small groups: Design with Canva, Edit with CapCut, Think With AI, Procreate + Procreate Dreams, Linearity Curve + Move.">
 <link rel="canonical" href="https://maryaelmakki.github.io/learn.html">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -60,7 +60,7 @@ form.in{animation-delay:.25s}
 <header><a class="brand" href="./">Marya El Makki</a><a class="back" href="./#systems">← Back to the portfolio</a></header>
 <main>
   <section aria-labelledby="cTitle">
-    <p class="eyebrow in" id="cKicker">Lessons and masterclasses</p>
+    <p class="eyebrow in" id="cKicker">Classes</p>
     <h1 class="in" id="cTitle">Learn with me</h1>
     <p class="lede in" id="cLede">Leave your details and I will get back to you personally to plan the sessions around what you want to make.</p>
     <ul class="points in" id="cPoints"></ul>
@@ -74,12 +74,12 @@ form.in{animation-delay:.25s}
     <p class="sub">I read every request and reply personally.</p>
     <label>Course
       <select name="course" id="course" required>
-        <option value="canva">Canva AI</option>
-        <option value="capcut">CapCut</option>
+        <option value="canva">Design with Canva</option>
+        <option value="capcut">Edit with CapCut</option>
         <option value="ai">Think With AI</option>
-        <option value="procreate">Procreate</option>
+        <option value="procreate">Procreate + Procreate Dreams</option>
         <option value="linearity">Linearity Curve + Move</option>
-        <option value="metahuman">Custom MetaHuman (coming soon)</option>
+        <option value="film">AI Filmmaking, A to Z (coming soon)</option>
       </select>
     </label>
     <label>Full name
@@ -110,12 +110,12 @@ form.in{animation-delay:.25s}
   var LIVE_HOSTS = ["maryaelmakki.github.io"];
   var LIVE = LIVE_HOSTS.indexOf(location.hostname) > -1;
   var C = {
-    canva:{k:"Masterclass · Canva AI",t:"Canva AI",l:"Generate, refine, adapt and produce: a hands-on workflow for creating, editing and repurposing content with Canva AI.",p:["Groups or one to one","Hands-on, using your own content"]},
-    capcut:{k:"Masterclass · CapCut",t:"CapCut",l:"Capture, edit, set up and deliver: a repeatable workflow from shooting on a phone to a finished, share-ready video.",p:["Groups or one to one","From shooting on a phone to a finished video"]},
-    ai:{k:"Lessons · Everyday AI",t:"Think With AI",l:"Using AI properly at work and at home: asking clearly, checking what it tells you, keeping private things private, and building a few routines that actually save you time.",p:["Groups or one to one","For work and everyday life"]},
-    procreate:{k:"Lessons · Procreate",t:"Procreate",l:"Lessons in drawing on the iPad: brushes, layers, line and colour, from first sketch to a finished illustration.",p:["Groups or one to one","Brushes, layers, line and colour"]},
-    linearity:{k:"Lessons · Linearity Curve + Move",t:"Linearity Curve + Move",l:"Build clean vector artwork in Curve, then bring it to life in Move: paths, shapes and layers first, then keyframes, easing and timing, until your own drawing animates.",p:["Groups or one to one","Make vectors, then animate them"]},
-    metahuman:{k:"Course · Coming soon",t:"Custom MetaHuman",l:"Capture a face with Blender Face Builder, sculpt it, bring it into MetaHuman in Unreal Engine, then add assets like masks and hair.",p:["Face capture and sculpting","MetaHuman in Unreal Engine","Adding custom assets"],s:true}
+    canva:{k:"Class · Canva",t:"Design with Canva",l:"Design, refine, adapt and produce: a hands-on workflow for creating, editing and repurposing content in Canva.",p:["Groups or one to one","Hands-on, using your own content"]},
+    capcut:{k:"Class · CapCut",t:"Edit with CapCut",l:"Capture, edit, set up and deliver: a repeatable workflow from shooting on a phone to a finished, share-ready video.",p:["Groups or one to one","From shooting on a phone to a finished video"]},
+    ai:{k:"Class · Everyday AI",t:"Think With AI",l:"Using AI properly at work and at home: asking clearly, checking what it tells you, keeping private things private, and building a few routines that actually save you time.",p:["Groups or one to one","For work and everyday life"]},
+    procreate:{k:"Class · Procreate",t:"Procreate + Procreate Dreams",l:"Brushes, layers, line and colour in Procreate, from first sketch to finished illustration, then into Procreate Dreams to animate the drawing frame by frame.",p:["Groups or one to one","Draw it, then animate it"]},
+    linearity:{k:"Class · Linearity Curve + Move",t:"Linearity Curve + Move",l:"Build clean vector artwork in Curve, then bring it to life in Move: paths, shapes and layers first, then keyframes, easing and timing, until your own drawing animates.",p:["Groups or one to one","Make vectors, then animate them"]},
+    film:{k:"Course · Coming soon",t:"AI Filmmaking, A to Z",l:"From an idea to a finished film: story and shot list, a character that stays consistent in every shot, image-to-video, then the edit, music and sound.",p:["Story and character","Consistent shots","Edit and sound"],s:true}
   };
   var sel = document.getElementById("course");
   function show(key){
